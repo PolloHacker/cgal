@@ -4,12 +4,16 @@
 #include <CGAL/compute_average_spacing.h>
 #include <CGAL/extract_mean_curvature_flow_skeleton.h>
 #include <CGAL/IO/read_points.h>
+#include <CGAL/mst_orient_normals.h>
+#include <CGAL/pca_estimate_normals.h>
 #include <CGAL/remove_outliers.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <sstream>
 #include <string>
@@ -37,6 +41,8 @@ struct Pipeline_options
   std::string output_dir = "skeleton_output";
   double outlier_percent = 0.0;
   int outlier_neighbors = 24;
+  int normal_estimation_neighbors = 24;
+  bool force_normal_estimation = false;
   bool keep_largest_component = true;
 };
 
@@ -89,7 +95,8 @@ void print_usage(const char* exe_name)
 {
   std::cerr << "Usage: " << exe_name
             << " [input_ply] [output_dir] [--remove-outliers-percent=VALUE]"
-            << " [--outlier-neighbors=K] [--keep-all-components]\n";
+            << " [--outlier-neighbors=K] [--normal-estimation-neighbors=K]"
+            << " [--force-estimate-normals] [--keep-all-components]\n";
 }
 
 /** \brief Parses command-line options into a pipeline options struct. */
@@ -132,6 +139,19 @@ bool parse_args(const int argc, char* argv[], Pipeline_options& options)
         std::cerr << "Error: --outlier-neighbors must be >= 2.\n";
         return false;
       }
+    }
+    else if (arg.rfind("--normal-estimation-neighbors=", 0) == 0)
+    {
+      options.normal_estimation_neighbors = std::stoi(arg.substr(30));
+      if (options.normal_estimation_neighbors < 2)
+      {
+        std::cerr << "Error: --normal-estimation-neighbors must be >= 2.\n";
+        return false;
+      }
+    }
+    else if (arg == "--force-estimate-normals")
+    {
+      options.force_normal_estimation = true;
     }
     else if (arg == "--keep-all-components")
     {
@@ -186,26 +206,9 @@ Output_paths make_output_paths(const Pipeline_options& options)
   return paths;
 }
 
-/** \brief Loads an oriented point cloud from PLY and validates normals availability. */
-bool load_oriented_points(const std::string& input_path, std::vector<Pwn>& points)
+/** \brief Counts normals that are near zero length. */
+std::size_t count_near_zero_normals(const std::vector<Pwn>& points)
 {
-  log_stage("1. Load point cloud + normals (PLY)");
-
-  if (!CGAL::IO::read_points(
-        input_path,
-        std::back_inserter(points),
-        CGAL::parameters::point_map(Point_map()).normal_map(Normal_map())))
-  {
-    std::cerr << "Error: cannot read point set from " << input_path << "\n";
-    return false;
-  }
-
-  if (points.empty())
-  {
-    std::cerr << "Error: point set is empty.\n";
-    return false;
-  }
-
   std::size_t zero_normals = 0;
   const double eps = std::numeric_limits<double>::epsilon();
   for (const Pwn& pwn : points)
@@ -214,6 +217,123 @@ bool load_oriented_points(const std::string& input_path, std::vector<Pwn>& point
     {
       ++zero_normals;
     }
+  }
+  return zero_normals;
+}
+
+/** \brief Estimates and orients normals, removing points that remain unoriented. */
+bool estimate_and_orient_normals(std::vector<Pwn>& points, const int requested_neighbors)
+{
+  log_stage("1.1 Estimate + orient normals");
+
+  if (points.size() < 3)
+  {
+    std::cerr << "Error: need at least 3 points to estimate normals.\n";
+    return false;
+  }
+
+  const std::size_t max_neighbors = points.size() - 1;
+  const unsigned int neighbors = static_cast<unsigned int>(
+    std::min<std::size_t>(static_cast<std::size_t>(requested_neighbors), max_neighbors));
+
+  if (neighbors < 2)
+  {
+    std::cerr << "Error: normal estimation requires at least 2 neighbors.\n";
+    return false;
+  }
+
+  CGAL::pca_estimate_normals<CGAL::Sequential_tag>(
+    points,
+    neighbors,
+    CGAL::parameters::point_map(Point_map()).normal_map(Normal_map()));
+
+  const auto unoriented_begin = CGAL::mst_orient_normals(
+    points,
+    neighbors,
+    CGAL::parameters::point_map(Point_map()).normal_map(Normal_map()));
+
+  const std::size_t unoriented_count = static_cast<std::size_t>(std::distance(unoriented_begin, points.end()));
+  if (unoriented_count > 0)
+  {
+    points.erase(unoriented_begin, points.end());
+    std::cout << "Normal orientation: removed " << unoriented_count
+              << " point(s) with ambiguous orientation.\n";
+  }
+
+  if (points.size() < 3)
+  {
+    std::cerr << "Error: too few oriented points after normal orientation.\n";
+    return false;
+  }
+
+  std::cout << "Normal estimation/orientation neighbors: " << neighbors << "\n";
+  std::cout << "Points after orientation: " << points.size() << "\n";
+  return true;
+}
+
+/** \brief Loads an oriented point cloud from PLY and validates normals availability. */
+bool load_oriented_points(const Pipeline_options& options, std::vector<Pwn>& points)
+{
+  log_stage("1. Load point cloud + normals (PLY)");
+
+  bool loaded_with_normals = CGAL::IO::read_points(
+    options.input_path,
+    std::back_inserter(points),
+    CGAL::parameters::point_map(Point_map()).normal_map(Normal_map()));
+
+  if (!loaded_with_normals)
+  {
+    std::vector<Point> raw_points;
+    if (!CGAL::IO::read_points(options.input_path, std::back_inserter(raw_points)))
+    {
+      std::cerr << "Error: cannot read point set from " << options.input_path << "\n";
+      return false;
+    }
+
+    points.clear();
+    points.reserve(raw_points.size());
+    for (const Point& p : raw_points)
+    {
+      points.emplace_back(p, Vector(0.0, 0.0, 0.0));
+    }
+
+    std::cout << "Input normals were not found/readable. Falling back to normal estimation.\n";
+  }
+
+  if (points.empty())
+  {
+    std::cerr << "Error: point set is empty.\n";
+    return false;
+  }
+
+  std::size_t zero_normals = count_near_zero_normals(points);
+  if (options.force_normal_estimation)
+  {
+    std::cout << "Normal estimation forced by --force-estimate-normals.\n";
+    if (!estimate_and_orient_normals(points, options.normal_estimation_neighbors))
+    {
+      return false;
+    }
+    zero_normals = count_near_zero_normals(points);
+  }
+  else if (zero_normals == points.size())
+  {
+    std::cout << "No valid normals detected. Estimating and orienting normals before reconstruction.\n";
+    if (!estimate_and_orient_normals(points, options.normal_estimation_neighbors))
+    {
+      return false;
+    }
+    zero_normals = count_near_zero_normals(points);
+  }
+  else if (zero_normals > 0)
+  {
+    std::cout << "Detected " << zero_normals
+              << " near-zero normals. Re-estimating normals for robustness.\n";
+    if (!estimate_and_orient_normals(points, options.normal_estimation_neighbors))
+    {
+      return false;
+    }
+    zero_normals = count_near_zero_normals(points);
   }
 
   if (zero_normals == points.size())
@@ -451,7 +571,7 @@ int main(int argc, char* argv[])
   const Output_paths output_paths = make_output_paths(options);
 
   std::vector<Pwn> points;
-  if (!load_oriented_points(options.input_path, points))
+  if (!load_oriented_points(options, points))
   {
     return EXIT_FAILURE;
   }
