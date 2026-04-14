@@ -61,11 +61,16 @@ struct Output_paths
 /** \brief Visitor used to serialize skeleton maximal polylines. */
 struct Display_polylines
 {
+
+  // A polyline is a maximal simple path in the skeleton graph, 
+  // i.e. a path that cannot be extended at either end without branching.
   const Skeleton& skeleton;
   std::ofstream& out;
   int polyline_size = 0;
   std::stringstream sstr;
 
+  // The visitor is called by CGAL::split_graph_into_polylines for each maximal polyline in the skeleton. 
+  // It accumulates the points of the current polyline and writes them to the output stream when the polyline ends.
   Display_polylines(const Skeleton& skeleton_ref, std::ofstream& out_ref)
     : skeleton(skeleton_ref), out(out_ref)
   {
@@ -206,7 +211,14 @@ Output_paths make_output_paths(const Pipeline_options& options)
   return paths;
 }
 
-/** \brief Counts normals that are near zero length. */
+/** \brief Counts normals that are near zero length. 
+ * 
+ * This is a heuristic check to identify points with invalid or missing normals, which can cause issues in Poisson reconstruction.
+ * 
+ * The threshold is set to machine epsilon, which is a very small value. 
+ * 
+ * In practice, you might want to use a slightly larger threshold to account for numerical imprecision.
+*/
 std::size_t count_near_zero_normals(const std::vector<Pwn>& points)
 {
   std::size_t zero_normals = 0;
@@ -221,7 +233,13 @@ std::size_t count_near_zero_normals(const std::vector<Pwn>& points)
   return zero_normals;
 }
 
-/** \brief Estimates and orients normals, removing points that remain unoriented. */
+/** \brief Estimates and orients normals, removing points that remain unoriented. 
+ * 
+ * This function first estimates normals using PCA, then orients them using a minimum spanning tree approach.
+ * 
+ * Points that cannot be oriented (e.g., due to ambiguous local geometry) are removed from the set, 
+ * as they can cause issues in Poisson reconstruction.
+*/
 bool estimate_and_orient_normals(std::vector<Pwn>& points, const int requested_neighbors)
 {
   log_stage("1.1 Estimate + orient normals");
@@ -271,7 +289,12 @@ bool estimate_and_orient_normals(std::vector<Pwn>& points, const int requested_n
   return true;
 }
 
-/** \brief Loads an oriented point cloud from PLY and validates normals availability. */
+/** \brief Loads an oriented point cloud from PLY and validates normals availability. 
+ * 
+ * This function attempts to read points and normals from the input PLY file. 
+ * 
+ * If normals are missing or unreadable, it falls back to loading just points and marks all normals as zero vectors.
+*/
 bool load_oriented_points(const Pipeline_options& options, std::vector<Pwn>& points)
 {
   log_stage("1. Load point cloud + normals (PLY)");
@@ -307,6 +330,7 @@ bool load_oriented_points(const Pipeline_options& options, std::vector<Pwn>& poi
   }
 
   std::size_t zero_normals = count_near_zero_normals(points);
+
   if (options.force_normal_estimation)
   {
     std::cout << "Normal estimation forced by --force-estimate-normals.\n";
@@ -352,11 +376,18 @@ bool load_oriented_points(const Pipeline_options& options, std::vector<Pwn>& poi
   return true;
 }
 
-/** \brief Applies optional point-cloud filtering and computes average spacing. */
+
+
+
+/** \brief Applies optional point-cloud filtering and computes average spacing. 
+ * 
+ * This function performs outlier removal based on average distance to neighbors.
+*/
 double preprocess_points(std::vector<Pwn>& points, const Pipeline_options& options)
 {
   log_stage("1.2 Optional preprocessing");
 
+  // Outlier removal is the process of removing points that have a large average distance to their K nearest neighbors.
   if (options.outlier_percent > 0.0)
   {
     const auto first_to_remove = CGAL::remove_outliers<CGAL::Sequential_tag>(
@@ -384,7 +415,8 @@ double preprocess_points(std::vector<Pwn>& points, const Pipeline_options& optio
 
 /**
  * \brief Writes a point+normal cloud to ASCII PLY.
- * \details This creates visualization snapshots for each point-cloud processing stage.
+ * 
+ * This function writes the points and normals in a PLY format.
  */
 bool write_oriented_points_ply(const fs::path& out_path, const std::vector<Pwn>& points)
 {
@@ -450,11 +482,19 @@ bool write_mesh_stage_visualization(const fs::path& out_path,
   return true;
 }
 
-/** \brief Runs mean-curvature-flow skeleton extraction on a closed triangle mesh. */
+/** \brief Runs mean-curvature-flow skeleton extraction on a closed triangle mesh. 
+ * 
+ * The input mesh must be a closed surface mesh. 
+ * 
+ * The function does not modify the input mesh, but extracts the skeleton into the output parameter.
+*/
 bool skeletonize(Triangle_mesh& mesh, Skeleton& skeleton)
 {
   log_stage("3. Mean curvature flow skeletonization");
 
+
+  // The mean curvature flow skeletonization algorithm a method that works 
+  // by simulating cloth on the surface of the mesh, which gradually contracts it while preserving its topology.
   CGAL::extract_mean_curvature_flow_skeleton(mesh, skeleton);
 
   std::cout << "Skeleton vertices: " << boost::num_vertices(skeleton) << "\n";
@@ -478,7 +518,11 @@ bool write_skeleton_polylines(const fs::path& out_path, const Skeleton& skeleton
   return true;
 }
 
-/** \brief Writes the skeleton as a plain edge list (segment endpoints). */
+/** \brief Writes the skeleton as a plain edge list (segment endpoints). 
+ * 
+ * The plain edge list is good for applications that only need the skeleton connectivity and geometry, 
+ * without the maximal polyline structure.
+*/
 bool write_skeleton_edges(const fs::path& out_path, const Skeleton& skeleton)
 {
   std::ofstream out(out_path.string());
@@ -510,6 +554,8 @@ bool write_correspondence(const fs::path& out_path,
     return false;
   }
 
+  // The skeletonization algorithm computes a set of vertices on the input mesh that correspond to each skeleton vertex.
+  // This function writes those correspondences as line segments from the skeleton vertex to each corresponding mesh.
   for (const Skeleton_vertex v : CGAL::make_range(vertices(skeleton)))
   {
     for (const mesh_vertex_descriptor vd : skeleton[v].vertices)

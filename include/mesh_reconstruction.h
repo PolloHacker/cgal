@@ -12,6 +12,9 @@ namespace mesh_reconstruction
 /** \brief Kernel used by the reconstruction and skeletonization pipeline. */
 using Kernel = CGAL::Simple_cartesian<double>;
 
+/** \brief Concurrency tag for parallel execution. */
+using Concurrency_tag = CGAL::Parallel_if_available_tag;
+
 /** \brief 3D point type used in the input point cloud. */
 using Point = Kernel::Point_3;
 

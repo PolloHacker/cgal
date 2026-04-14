@@ -1,6 +1,12 @@
 #include "mesh_reconstruction.h"
 
-#include <CGAL/IO/polygon_mesh_io.h>
+#if __has_include(<CGAL/IO/polygon_mesh_io.h>)
+  #include <CGAL/IO/polygon_mesh_io.h>
+#elif __has_include(<CGAL/boost/graph/IO/polygon_mesh_io.h>)
+  #include <CGAL/boost/graph/IO/polygon_mesh_io.h>
+#else
+  #error "polygon_mesh_io header not found in this CGAL installation"
+#endif
 #include <CGAL/Polygon_mesh_processing/border.h>
 #include <CGAL/Polygon_mesh_processing/connected_components.h>
 #include <CGAL/Polygon_mesh_processing/stitch_borders.h>
