@@ -48,13 +48,13 @@ struct Pipeline_options
   bool keep_largest_component = true;
   bool enable_wlop = false;
 
-  // wlop_retain_percent is the percentage of points to retain after WLOP simplification, 
+  // wlop_retain_percent is the percentage of points to retain after WLOP simplification,
   // relative to the input point set size.
   double wlop_retain_percent = 25.0;
 
-  // wlop_neighbor_radius is in the same units as the input point coordinates, 
-  // and should be set according to the point cloud density. 
-  // A common choice is to set it to a small multiple (e.g. 2 or 3) of the average spacing of the input points, 
+  // wlop_neighbor_radius is in the same units as the input point coordinates,
+  // and should be set according to the point cloud density.
+  // A common choice is to set it to a small multiple (e.g. 2 or 3) of the average spacing of the input points,
   // which can be computed using CGAL::compute_average_spacing.
   double wlop_neighbor_radius = -1.0;
   unsigned int wlop_iterations = 35;
@@ -77,17 +77,17 @@ struct Output_paths
 struct Display_polylines
 {
 
-  // A polyline is a maximal simple path in the skeleton graph, 
+  // A polyline is a maximal simple path in the skeleton graph,
   // i.e. a path that cannot be extended at either end without branching.
-  const Skeleton& skeleton;
-  std::ofstream& out;
+  const Skeleton &skeleton;
+  std::ofstream &out;
   int polyline_size = 0;
   std::stringstream sstr;
 
-  // The visitor is called by CGAL::split_graph_into_polylines for each maximal polyline in the skeleton. 
+  // The visitor is called by CGAL::split_graph_into_polylines for each maximal polyline in the skeleton.
   // It accumulates the points of the current polyline and writes them to the output stream when the polyline ends.
-  Display_polylines(const Skeleton& skeleton_ref, std::ofstream& out_ref)
-    : skeleton(skeleton_ref), out(out_ref)
+  Display_polylines(const Skeleton &skeleton_ref, std::ofstream &out_ref)
+      : skeleton(skeleton_ref), out(out_ref)
   {
   }
 
@@ -111,7 +111,7 @@ struct Display_polylines
 };
 
 /** \brief Prints command-line usage for the executable. */
-void print_usage(const char* exe_name)
+void print_usage(const char *exe_name)
 {
   std::cerr << "Usage: " << exe_name
             << " [input_ply] [output_dir] [--remove-outliers-percent=VALUE]"
@@ -123,7 +123,7 @@ void print_usage(const char* exe_name)
 }
 
 /** \brief Parses command-line options into a pipeline options struct. */
-bool parse_args(const int argc, char* argv[], Pipeline_options& options)
+bool parse_args(const int argc, char *argv[], Pipeline_options &options)
 {
   if (argc > 1)
   {
@@ -235,13 +235,13 @@ bool parse_args(const int argc, char* argv[], Pipeline_options& options)
 }
 
 /** \brief Emits a stage label to make the pipeline trace easy to follow. */
-void log_stage(const std::string& label)
+void log_stage(const std::string &label)
 {
   std::cout << "\n[Stage] " << label << "\n";
 }
 
 /** \brief Creates the output directory when it does not already exist. */
-bool prepare_output_dir(const fs::path& out_dir)
+bool prepare_output_dir(const fs::path &out_dir)
 {
   std::error_code ec;
   fs::create_directories(out_dir, ec);
@@ -255,7 +255,7 @@ bool prepare_output_dir(const fs::path& out_dir)
 }
 
 /** \brief Builds all output artifact paths from the input stem and output directory. */
-Output_paths make_output_paths(const Pipeline_options& options)
+Output_paths make_output_paths(const Pipeline_options &options)
 {
   const fs::path input(options.input_path);
   const std::string stem = input.stem().string();
@@ -272,19 +272,19 @@ Output_paths make_output_paths(const Pipeline_options& options)
   return paths;
 }
 
-/** \brief Counts normals that are near zero length. 
- * 
+/** \brief Counts normals that are near zero length.
+ *
  * This is a heuristic check to identify points with invalid or missing normals, which can cause issues in Poisson reconstruction.
- * 
- * The threshold is set to machine epsilon, which is a very small value. 
- * 
+ *
+ * The threshold is set to machine epsilon, which is a very small value.
+ *
  * In practice, you might want to use a slightly larger threshold to account for numerical imprecision.
-*/
-std::size_t count_near_zero_normals(const std::vector<Pwn>& points)
+ */
+std::size_t count_near_zero_normals(const std::vector<Pwn> &points)
 {
   std::size_t zero_normals = 0;
   const double eps = std::numeric_limits<double>::epsilon();
-  for (const Pwn& pwn : points)
+  for (const Pwn &pwn : points)
   {
     if (pwn.second.squared_length() <= eps)
     {
@@ -294,14 +294,14 @@ std::size_t count_near_zero_normals(const std::vector<Pwn>& points)
   return zero_normals;
 }
 
-/** \brief Estimates and orients normals, removing points that remain unoriented. 
- * 
+/** \brief Estimates and orients normals, removing points that remain unoriented.
+ *
  * This function first estimates normals using PCA, then orients them using a minimum spanning tree approach.
- * 
- * Points that cannot be oriented (e.g., due to ambiguous local geometry) are removed from the set, 
+ *
+ * Points that cannot be oriented (e.g., due to ambiguous local geometry) are removed from the set,
  * as they can cause issues in Poisson reconstruction.
-*/
-bool estimate_and_orient_normals(std::vector<Pwn>& points, const int requested_neighbors)
+ */
+bool estimate_and_orient_normals(std::vector<Pwn> &points, const int requested_neighbors)
 {
   log_stage("1.1 Estimate + orient normals");
 
@@ -313,7 +313,7 @@ bool estimate_and_orient_normals(std::vector<Pwn>& points, const int requested_n
 
   const std::size_t max_neighbors = points.size() - 1;
   const unsigned int neighbors = static_cast<unsigned int>(
-    std::min<std::size_t>(static_cast<std::size_t>(requested_neighbors), max_neighbors));
+      std::min<std::size_t>(static_cast<std::size_t>(requested_neighbors), max_neighbors));
 
   if (neighbors < 2)
   {
@@ -322,14 +322,14 @@ bool estimate_and_orient_normals(std::vector<Pwn>& points, const int requested_n
   }
 
   CGAL::pca_estimate_normals<CGAL::Sequential_tag>(
-    points,
-    neighbors,
-    CGAL::parameters::point_map(Point_map()).normal_map(Normal_map()));
+      points,
+      neighbors,
+      CGAL::parameters::point_map(Point_map()).normal_map(Normal_map()));
 
   const auto unoriented_begin = CGAL::mst_orient_normals(
-    points,
-    neighbors,
-    CGAL::parameters::point_map(Point_map()).normal_map(Normal_map()));
+      points,
+      neighbors,
+      CGAL::parameters::point_map(Point_map()).normal_map(Normal_map()));
 
   const std::size_t unoriented_count = static_cast<std::size_t>(std::distance(unoriented_begin, points.end()));
   if (unoriented_count > 0)
@@ -350,20 +350,20 @@ bool estimate_and_orient_normals(std::vector<Pwn>& points, const int requested_n
   return true;
 }
 
-/** \brief Loads an oriented point cloud from PLY and validates normals availability. 
- * 
- * This function attempts to read points and normals from the input PLY file. 
- * 
+/** \brief Loads an oriented point cloud from PLY and validates normals availability.
+ *
+ * This function attempts to read points and normals from the input PLY file.
+ *
  * If normals are missing or unreadable, it falls back to loading just points and marks all normals as zero vectors.
-*/
-bool load_oriented_points(const Pipeline_options& options, std::vector<Pwn>& points)
+ */
+bool load_oriented_points(const Pipeline_options &options, std::vector<Pwn> &points)
 {
   log_stage("1. Load point cloud + normals (PLY)");
 
   bool loaded_with_normals = CGAL::IO::read_points(
-    options.input_path,
-    std::back_inserter(points),
-    CGAL::parameters::point_map(Point_map()).normal_map(Normal_map()));
+      options.input_path,
+      std::back_inserter(points),
+      CGAL::parameters::point_map(Point_map()).normal_map(Normal_map()));
 
   if (!loaded_with_normals)
   {
@@ -376,7 +376,7 @@ bool load_oriented_points(const Pipeline_options& options, std::vector<Pwn>& poi
 
     points.clear();
     points.reserve(raw_points.size());
-    for (const Point& p : raw_points)
+    for (const Point &p : raw_points)
     {
       points.emplace_back(p, Vector(0.0, 0.0, 0.0));
     }
@@ -388,6 +388,18 @@ bool load_oriented_points(const Pipeline_options& options, std::vector<Pwn>& poi
   {
     std::cerr << "Error: point set is empty.\n";
     return false;
+  }
+
+  if (options.enable_wlop)
+  {
+    if (options.force_normal_estimation)
+    {
+      std::cout << "--force-estimate-normals noted: normals will be estimated after WLOP downsampling.\n";
+    }
+
+    std::cout << "WLOP enabled: deferring normal estimation/orientation until after downsampling.\n";
+    std::cout << "Loaded points: " << points.size() << "\n";
+    return true;
   }
 
   std::size_t zero_normals = count_near_zero_normals(points);
@@ -437,15 +449,12 @@ bool load_oriented_points(const Pipeline_options& options, std::vector<Pwn>& poi
   return true;
 }
 
-
-
-
 /** \brief Optionally downsamples and regularizes points with WLOP, then re-estimates normals.
  *
  * WLOP operates on point positions only, so normals are re-estimated and re-oriented after
  * downsampling before reconstruction.
  */
-bool apply_wlop_downsampling(std::vector<Pwn>& points, const Pipeline_options& options)
+bool apply_wlop_downsampling(std::vector<Pwn> &points, const Pipeline_options &options)
 {
   if (!options.enable_wlop)
   {
@@ -464,22 +473,22 @@ bool apply_wlop_downsampling(std::vector<Pwn>& points, const Pipeline_options& o
   const std::size_t input_count = points.size();
   std::vector<Point> downsampled_points;
   downsampled_points.reserve(std::max<std::size_t>(
-    3,
-    static_cast<std::size_t>(
-      std::ceil(static_cast<double>(input_count) * (options.wlop_retain_percent / 100.0)))));
+      3,
+      static_cast<std::size_t>(
+          std::ceil(static_cast<double>(input_count) * (options.wlop_retain_percent / 100.0)))));
 
   const double wlop_radius = (options.wlop_neighbor_radius <= 0.0)
-                               ? -1.0
-                               : options.wlop_neighbor_radius;
+                                 ? -1.0
+                                 : options.wlop_neighbor_radius;
 
   CGAL::wlop_simplify_and_regularize_point_set<CGAL::Sequential_tag>(
-    points,
-    std::back_inserter(downsampled_points),
-    CGAL::parameters::point_map(Point_map())
-      .select_percentage(options.wlop_retain_percent)
-      .neighbor_radius(wlop_radius)
-      .number_of_iterations(options.wlop_iterations)
-      .require_uniform_sampling(options.wlop_require_uniform_sampling));
+      points,
+      std::back_inserter(downsampled_points),
+      CGAL::parameters::point_map(Point_map())
+          .select_percentage(options.wlop_retain_percent)
+          .neighbor_radius(wlop_radius)
+          .number_of_iterations(options.wlop_iterations)
+          .require_uniform_sampling(options.wlop_require_uniform_sampling));
 
   if (downsampled_points.size() < 3)
   {
@@ -490,7 +499,7 @@ bool apply_wlop_downsampling(std::vector<Pwn>& points, const Pipeline_options& o
 
   points.clear();
   points.reserve(downsampled_points.size());
-  for (const Point& p : downsampled_points)
+  for (const Point &p : downsampled_points)
   {
     points.emplace_back(p, Vector(0.0, 0.0, 0.0));
   }
@@ -511,14 +520,13 @@ bool apply_wlop_downsampling(std::vector<Pwn>& points, const Pipeline_options& o
   return true;
 }
 
-
-/** \brief Applies optional point-cloud filtering and computes average spacing. 
- * 
+/** \brief Applies optional point-cloud filtering and computes average spacing.
+ *
  * This function performs outlier removal based on average distance to neighbors.
-*/
-bool preprocess_points(std::vector<Pwn>& points,
-                       const Pipeline_options& options,
-                       double& average_spacing)
+ */
+bool preprocess_points(std::vector<Pwn> &points,
+                       const Pipeline_options &options,
+                       double &average_spacing)
 {
   log_stage("1.2 Optional preprocessing");
 
@@ -526,9 +534,9 @@ bool preprocess_points(std::vector<Pwn>& points,
   if (options.outlier_percent > 0.0)
   {
     const auto first_to_remove = CGAL::remove_outliers<CGAL::Sequential_tag>(
-      points,
-      options.outlier_neighbors,
-      CGAL::parameters::point_map(Point_map()).threshold_percent(options.outlier_percent));
+        points,
+        options.outlier_neighbors,
+        CGAL::parameters::point_map(Point_map()).threshold_percent(options.outlier_percent));
 
     const std::size_t before = points.size();
     points.erase(first_to_remove, points.end());
@@ -557,9 +565,9 @@ bool preprocess_points(std::vector<Pwn>& points,
   }
 
   average_spacing = CGAL::compute_average_spacing<CGAL::Sequential_tag>(
-    points,
-    6,
-    CGAL::parameters::point_map(Point_map()));
+      points,
+      6,
+      CGAL::parameters::point_map(Point_map()));
 
   std::cout << "Average spacing (k=6): " << average_spacing << "\n";
   return true;
@@ -567,10 +575,10 @@ bool preprocess_points(std::vector<Pwn>& points,
 
 /**
  * \brief Writes a point+normal cloud to ASCII PLY.
- * 
+ *
  * This function writes the points and normals in a PLY format.
  */
-bool write_oriented_points_ply(const fs::path& out_path, const std::vector<Pwn>& points)
+bool write_oriented_points_ply(const fs::path &out_path, const std::vector<Pwn> &points)
 {
   std::ofstream out(out_path.string());
   if (!out)
@@ -591,10 +599,10 @@ bool write_oriented_points_ply(const fs::path& out_path, const std::vector<Pwn>&
   out << "end_header\n";
 
   out.precision(17);
-  for (const Pwn& pwn : points)
+  for (const Pwn &pwn : points)
   {
-    const Point& p = pwn.first;
-    const Vector& n = pwn.second;
+    const Point &p = pwn.first;
+    const Vector &n = pwn.second;
     out << p.x() << " " << p.y() << " " << p.z() << " "
         << n.x() << " " << n.y() << " " << n.z() << "\n";
   }
@@ -603,9 +611,9 @@ bool write_oriented_points_ply(const fs::path& out_path, const std::vector<Pwn>&
 }
 
 /** \brief Exports a point-cloud snapshot for visualization and logs the stage. */
-bool write_point_stage_visualization(const fs::path& out_path,
-                                     const std::vector<Pwn>& points,
-                                     const std::string& stage_label)
+bool write_point_stage_visualization(const fs::path &out_path,
+                                     const std::vector<Pwn> &points,
+                                     const std::string &stage_label)
 {
   log_stage(stage_label);
 
@@ -619,9 +627,9 @@ bool write_point_stage_visualization(const fs::path& out_path,
 }
 
 /** \brief Exports a mesh snapshot for visualization and logs the stage. */
-bool write_mesh_stage_visualization(const fs::path& out_path,
-                                    const Triangle_mesh& mesh,
-                                    const std::string& stage_label)
+bool write_mesh_stage_visualization(const fs::path &out_path,
+                                    const Triangle_mesh &mesh,
+                                    const std::string &stage_label)
 {
   log_stage(stage_label);
 
@@ -634,18 +642,17 @@ bool write_mesh_stage_visualization(const fs::path& out_path,
   return true;
 }
 
-/** \brief Runs mean-curvature-flow skeleton extraction on a closed triangle mesh. 
- * 
- * The input mesh must be a closed surface mesh. 
- * 
+/** \brief Runs mean-curvature-flow skeleton extraction on a closed triangle mesh.
+ *
+ * The input mesh must be a closed surface mesh.
+ *
  * The function does not modify the input mesh, but extracts the skeleton into the output parameter.
-*/
-bool skeletonize(Triangle_mesh& mesh, Skeleton& skeleton)
+ */
+bool skeletonize(Triangle_mesh &mesh, Skeleton &skeleton)
 {
   log_stage("3. Mean curvature flow skeletonization");
 
-
-  // The mean curvature flow skeletonization algorithm a method that works 
+  // The mean curvature flow skeletonization algorithm a method that works
   // by simulating cloth on the surface of the mesh, which gradually contracts it while preserving its topology.
   CGAL::extract_mean_curvature_flow_skeleton(mesh, skeleton);
 
@@ -656,7 +663,7 @@ bool skeletonize(Triangle_mesh& mesh, Skeleton& skeleton)
 }
 
 /** \brief Writes maximal skeleton polylines as one polyline per row. */
-bool write_skeleton_polylines(const fs::path& out_path, const Skeleton& skeleton)
+bool write_skeleton_polylines(const fs::path &out_path, const Skeleton &skeleton)
 {
   std::ofstream out(out_path.string());
   if (!out)
@@ -670,12 +677,12 @@ bool write_skeleton_polylines(const fs::path& out_path, const Skeleton& skeleton
   return true;
 }
 
-/** \brief Writes the skeleton as a plain edge list (segment endpoints). 
- * 
- * The plain edge list is good for applications that only need the skeleton connectivity and geometry, 
+/** \brief Writes the skeleton as a plain edge list (segment endpoints).
+ *
+ * The plain edge list is good for applications that only need the skeleton connectivity and geometry,
  * without the maximal polyline structure.
-*/
-bool write_skeleton_edges(const fs::path& out_path, const Skeleton& skeleton)
+ */
+bool write_skeleton_edges(const fs::path &out_path, const Skeleton &skeleton)
 {
   std::ofstream out(out_path.string());
   if (!out)
@@ -695,9 +702,9 @@ bool write_skeleton_edges(const fs::path& out_path, const Skeleton& skeleton)
 }
 
 /** \brief Writes vertex-to-skeleton correspondence as line segments. */
-bool write_correspondence(const fs::path& out_path,
-                          const Skeleton& skeleton,
-                          const Triangle_mesh& mesh)
+bool write_correspondence(const fs::path &out_path,
+                          const Skeleton &skeleton,
+                          const Triangle_mesh &mesh)
 {
   std::ofstream out(out_path.string());
   if (!out)
@@ -719,9 +726,9 @@ bool write_correspondence(const fs::path& out_path,
 }
 
 /** \brief Writes all skeleton artifacts to disk. */
-bool write_skeleton_outputs(const Output_paths& paths,
-                            const Skeleton& skeleton,
-                            const Triangle_mesh& mesh)
+bool write_skeleton_outputs(const Output_paths &paths,
+                            const Skeleton &skeleton,
+                            const Triangle_mesh &mesh)
 {
   log_stage("3.1 Export skeleton artifacts");
 
@@ -747,7 +754,7 @@ bool write_skeleton_outputs(const Output_paths& paths,
 }
 
 /** \brief point-cloud to skeleton pipeline. */
-int main(int argc, char* argv[])
+int main(int argc, char *argv[])
 {
 #ifndef CGAL_EIGEN3_ENABLED
   std::cerr << "Error: CGAL_EIGEN3_ENABLED is not defined. "
@@ -775,9 +782,9 @@ int main(int argc, char* argv[])
   }
 
   if (!write_point_stage_visualization(
-        output_paths.raw_points,
-        points,
-        "1.1 Visualize raw input point cloud"))
+          output_paths.raw_points,
+          points,
+          "1.1 Visualize raw input point cloud"))
   {
     return EXIT_FAILURE;
   }
@@ -789,9 +796,9 @@ int main(int argc, char* argv[])
   }
 
   if (!write_point_stage_visualization(
-        output_paths.preprocessed_points,
-        points,
-        "1.3 Visualize preprocessed point cloud"))
+          output_paths.preprocessed_points,
+          points,
+          "1.3 Visualize preprocessed point cloud"))
   {
     return EXIT_FAILURE;
   }
@@ -804,9 +811,9 @@ int main(int argc, char* argv[])
   }
 
   if (!write_mesh_stage_visualization(
-        output_paths.raw_reconstructed_mesh,
-        mesh,
-        "2.1 Visualize raw Poisson reconstruction"))
+          output_paths.raw_reconstructed_mesh,
+          mesh,
+          "2.1 Visualize raw Poisson reconstruction"))
   {
     return EXIT_FAILURE;
   }
@@ -818,9 +825,9 @@ int main(int argc, char* argv[])
   }
 
   if (!write_mesh_stage_visualization(
-        output_paths.reconstructed_mesh,
-        mesh,
-        "2.3 Export normalized reconstructed mesh"))
+          output_paths.reconstructed_mesh,
+          mesh,
+          "2.3 Export normalized reconstructed mesh"))
   {
     return EXIT_FAILURE;
   }
