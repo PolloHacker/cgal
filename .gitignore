@@ -1,3 +1,5 @@
 build/
 skeleton_output/
 input/
+
+.vscode/
