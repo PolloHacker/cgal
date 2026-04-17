@@ -286,12 +286,62 @@ std::size_t count_near_zero_normals(const std::vector<Pwn> &points)
   const double eps = std::numeric_limits<double>::epsilon();
   for (const Pwn &pwn : points)
   {
-    if (pwn.second.squared_length() <= eps)
+    if (!std::isfinite(pwn.second.x()) || !std::isfinite(pwn.second.y()) || !std::isfinite(pwn.second.z()) ||
+        pwn.second.squared_length() <= eps)
     {
       ++zero_normals;
     }
   }
   return zero_normals;
+}
+
+/** \brief Validates that a point set is usable for reconstruction stages. */
+bool validate_point_set(const std::vector<Pwn> &points,
+                        const char *context,
+                        const bool require_oriented_normals)
+{
+  if (points.size() < 3)
+  {
+    std::cerr << "Error: " << context << " needs at least 3 points.\n";
+    return false;
+  }
+
+  const double eps = std::numeric_limits<double>::epsilon();
+  for (std::size_t index = 0; index < points.size(); ++index)
+  {
+    const Pwn &pwn = points[index];
+    if (!std::isfinite(pwn.first.x()) || !std::isfinite(pwn.first.y()) || !std::isfinite(pwn.first.z()))
+    {
+      std::cerr << "Error: " << context << " contains a non-finite point at index " << index << ".\n";
+      return false;
+    }
+
+    if (!std::isfinite(pwn.second.x()) || !std::isfinite(pwn.second.y()) || !std::isfinite(pwn.second.z()))
+    {
+      std::cerr << "Error: " << context << " contains a non-finite normal at index " << index << ".\n";
+      return false;
+    }
+
+    if (require_oriented_normals && pwn.second.squared_length() <= eps)
+    {
+      std::cerr << "Error: " << context << " contains a zero-length normal at index " << index << ".\n";
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/** \brief Validates spacing values used by Poisson reconstruction. */
+bool validate_average_spacing(const double average_spacing, const char *context)
+{
+  if (!std::isfinite(average_spacing) || average_spacing <= 0.0)
+  {
+    std::cerr << "Error: " << context << " must be finite and positive.\n";
+    return false;
+  }
+
+  return true;
 }
 
 /** \brief Estimates and orients normals, removing points that remain unoriented.
@@ -303,11 +353,8 @@ std::size_t count_near_zero_normals(const std::vector<Pwn> &points)
  */
 bool estimate_and_orient_normals(std::vector<Pwn> &points, const int requested_neighbors)
 {
-  log_stage("1.1 Estimate + orient normals");
-
-  if (points.size() < 3)
+  if (!validate_point_set(points, "normal estimation input", false))
   {
-    std::cerr << "Error: need at least 3 points to estimate normals.\n";
     return false;
   }
 
@@ -356,21 +403,21 @@ bool estimate_and_orient_normals(std::vector<Pwn> &points, const int requested_n
  *
  * If normals are missing or unreadable, it falls back to loading just points and marks all normals as zero vectors.
  */
-bool load_oriented_points(const Pipeline_options &options, std::vector<Pwn> &points)
+bool load_oriented_points(const std::string &input_path, std::vector<Pwn> &points)
 {
   log_stage("1. Load point cloud + normals (PLY)");
 
   bool loaded_with_normals = CGAL::IO::read_points(
-      options.input_path,
+      input_path,
       std::back_inserter(points),
       CGAL::parameters::point_map(Point_map()).normal_map(Normal_map()));
 
   if (!loaded_with_normals)
   {
     std::vector<Point> raw_points;
-    if (!CGAL::IO::read_points(options.input_path, std::back_inserter(raw_points)))
+    if (!CGAL::IO::read_points(input_path, std::back_inserter(raw_points)))
     {
-      std::cerr << "Error: cannot read point set from " << options.input_path << "\n";
+      std::cerr << "Error: cannot read point set from " << input_path << "\n";
       return false;
     }
 
@@ -381,70 +428,15 @@ bool load_oriented_points(const Pipeline_options &options, std::vector<Pwn> &poi
       points.emplace_back(p, Vector(0.0, 0.0, 0.0));
     }
 
-    std::cout << "Input normals were not found/readable. Falling back to normal estimation.\n";
+    std::cout << "Input normals were not found/readable. Falling back to zero normals.\n";
   }
 
-  if (points.empty())
+  if (!validate_point_set(points, "loaded point set", false))
   {
-    std::cerr << "Error: point set is empty.\n";
-    return false;
-  }
-
-  if (options.enable_wlop)
-  {
-    if (options.force_normal_estimation)
-    {
-      std::cout << "--force-estimate-normals noted: normals will be estimated after WLOP downsampling.\n";
-    }
-
-    std::cout << "WLOP enabled: deferring normal estimation/orientation until after downsampling.\n";
-    std::cout << "Loaded points: " << points.size() << "\n";
-    return true;
-  }
-
-  std::size_t zero_normals = count_near_zero_normals(points);
-
-  if (options.force_normal_estimation)
-  {
-    std::cout << "Normal estimation forced by --force-estimate-normals.\n";
-    if (!estimate_and_orient_normals(points, options.normal_estimation_neighbors))
-    {
-      return false;
-    }
-    zero_normals = count_near_zero_normals(points);
-  }
-  else if (zero_normals == points.size())
-  {
-    std::cout << "No valid normals detected. Estimating and orienting normals before reconstruction.\n";
-    if (!estimate_and_orient_normals(points, options.normal_estimation_neighbors))
-    {
-      return false;
-    }
-    zero_normals = count_near_zero_normals(points);
-  }
-  else if (zero_normals > 0)
-  {
-    std::cout << "Detected " << zero_normals
-              << " near-zero normals. Re-estimating normals for robustness.\n";
-    if (!estimate_and_orient_normals(points, options.normal_estimation_neighbors))
-    {
-      return false;
-    }
-    zero_normals = count_near_zero_normals(points);
-  }
-
-  if (zero_normals == points.size())
-  {
-    std::cerr << "Error: no valid normals found in input. Poisson reconstruction requires oriented normals.\n";
     return false;
   }
 
   std::cout << "Loaded points: " << points.size() << "\n";
-  if (zero_normals > 0)
-  {
-    std::cout << "Warning: " << zero_normals
-              << " points have near-zero normals. Reconstruction quality may degrade.\n";
-  }
 
   return true;
 }
@@ -456,17 +448,8 @@ bool load_oriented_points(const Pipeline_options &options, std::vector<Pwn> &poi
  */
 bool apply_wlop_downsampling(std::vector<Pwn> &points, const Pipeline_options &options)
 {
-  if (!options.enable_wlop)
+  if (!validate_point_set(points, "WLOP input", false))
   {
-    std::cout << "WLOP downsampling: disabled.\n";
-    return true;
-  }
-
-  log_stage("1.2b WLOP downsampling");
-
-  if (points.size() < 3)
-  {
-    std::cerr << "Error: WLOP requires at least 3 points.\n";
     return false;
   }
 
@@ -504,6 +487,11 @@ bool apply_wlop_downsampling(std::vector<Pwn> &points, const Pipeline_options &o
     points.emplace_back(p, Vector(0.0, 0.0, 0.0));
   }
 
+  if (!validate_point_set(points, "WLOP output", false))
+  {
+    return false;
+  }
+
   std::cout << "WLOP retain percent: " << options.wlop_retain_percent << "\n";
   std::cout << "WLOP neighbor radius: " << options.wlop_neighbor_radius
             << (options.wlop_neighbor_radius <= 0.0 ? " (auto)" : "") << "\n";
@@ -512,27 +500,44 @@ bool apply_wlop_downsampling(std::vector<Pwn> &points, const Pipeline_options &o
             << (options.wlop_require_uniform_sampling ? "enabled" : "disabled") << "\n";
   std::cout << "WLOP points: " << input_count << " -> " << points.size() << "\n";
 
-  if (!estimate_and_orient_normals(points, options.normal_estimation_neighbors))
-  {
-    return false;
-  }
-
   return true;
 }
 
 /** \brief Applies optional point-cloud filtering and computes average spacing.
  *
- * This function performs outlier removal based on average distance to neighbors.
+ * This function performs WLOP, optional outlier removal, normal estimation, and average spacing computation
+ * in that order.
  */
 bool preprocess_points(std::vector<Pwn> &points,
                        const Pipeline_options &options,
                        double &average_spacing)
 {
-  log_stage("1.2 Optional preprocessing");
+  if (!validate_point_set(points, "loaded point set", false))
+  {
+    return false;
+  }
 
-  // Outlier removal is the process of removing points that have a large average distance to their K nearest neighbors.
+  if (options.enable_wlop)
+  {
+    log_stage("1.2 WLOP downsampling");
+    if (!apply_wlop_downsampling(points, options))
+    {
+      return false;
+    }
+  }
+  else
+  {
+    std::cout << "WLOP downsampling: disabled.\n";
+  }
+
+  if (!validate_point_set(points, "post-WLOP point set", false))
+  {
+    return false;
+  }
+
   if (options.outlier_percent > 0.0)
   {
+    log_stage("1.3 Outlier removal");
     const auto first_to_remove = CGAL::remove_outliers<CGAL::Sequential_tag>(
         points,
         options.outlier_neighbors,
@@ -547,27 +552,39 @@ bool preprocess_points(std::vector<Pwn> &points,
     std::cout << "Outlier removal: disabled.\n";
   }
 
-  if (points.size() < 3)
-  {
-    std::cerr << "Error: too few points after outlier removal.\n";
-    return false;
-  }
-
-  if (!apply_wlop_downsampling(points, options))
+  if (!validate_point_set(points, "post-outlier point set", false))
   {
     return false;
   }
 
-  if (points.size() < 3)
+  if (options.force_normal_estimation || count_near_zero_normals(points) > 0)
   {
-    std::cerr << "Error: too few points for average spacing computation.\n";
+    log_stage("1.4 Estimate + orient normals");
+    if (!estimate_and_orient_normals(points, options.normal_estimation_neighbors))
+    {
+      return false;
+    }
+  }
+  else
+  {
+    std::cout << "Normal estimation: skipped; input normals are already usable.\n";
+  }
+
+  if (!validate_point_set(points, "oriented point set", true))
+  {
     return false;
   }
 
+  log_stage("1.5 Average spacing");
   average_spacing = CGAL::compute_average_spacing<CGAL::Sequential_tag>(
       points,
       6,
       CGAL::parameters::point_map(Point_map()));
+
+  if (!validate_average_spacing(average_spacing, "average spacing"))
+  {
+    return false;
+  }
 
   std::cout << "Average spacing (k=6): " << average_spacing << "\n";
   return true;
@@ -776,7 +793,7 @@ int main(int argc, char *argv[])
   const Output_paths output_paths = make_output_paths(options);
 
   std::vector<Pwn> points;
-  if (!load_oriented_points(options, points))
+  if (!load_oriented_points(options.input_path, points))
   {
     return EXIT_FAILURE;
   }

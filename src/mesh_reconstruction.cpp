@@ -15,7 +15,9 @@
 #include <CGAL/boost/graph/helpers.h>
 #include <CGAL/poisson_surface_reconstruction.h>
 
+#include <cmath>
 #include <iostream>
+#include <limits>
 #include <vector>
 
 namespace PMP = CGAL::Polygon_mesh_processing;
@@ -27,19 +29,62 @@ namespace mesh_reconstruction
                                 const double average_spacing,
                                 Triangle_mesh &mesh)
   {
-    if (!CGAL::poisson_surface_reconstruction_delaunay(
-            points.begin(),
-            points.end(),
-            Point_map(),
-            Normal_map(),
-            mesh,
-            average_spacing,
-            20.0,
-            30.0,
-            0.375,
-            CGAL::Manifold_tag()))
+    if (points.size() < 3)
     {
-      std::cerr << "Error: Poisson reconstruction failed.\n";
+      std::cerr << "Error: Poisson reconstruction needs at least 3 points.\n";
+      return false;
+    }
+
+    if (!std::isfinite(average_spacing) || average_spacing <= 0.0)
+    {
+      std::cerr << "Error: Poisson reconstruction requires a finite, positive average spacing.\n";
+      return false;
+    }
+
+    const double eps = std::numeric_limits<double>::epsilon();
+    for (std::size_t index = 0; index < points.size(); ++index)
+    {
+      const Pwn &pwn = points[index];
+      if (!std::isfinite(pwn.first.x()) || !std::isfinite(pwn.first.y()) || !std::isfinite(pwn.first.z()))
+      {
+        std::cerr << "Error: Poisson reconstruction received a non-finite point at index " << index << ".\n";
+        return false;
+      }
+
+      if (!std::isfinite(pwn.second.x()) || !std::isfinite(pwn.second.y()) || !std::isfinite(pwn.second.z()) ||
+          pwn.second.squared_length() <= eps)
+      {
+        std::cerr << "Error: Poisson reconstruction requires finite, non-zero normals at index " << index << ".\n";
+        return false;
+      }
+    }
+
+    try
+    {
+      if (!CGAL::poisson_surface_reconstruction_delaunay(
+              points.begin(),
+              points.end(),
+              Point_map(),
+              Normal_map(),
+              mesh,
+              average_spacing,
+              20.0,
+              30.0,
+              0.375,
+              CGAL::Manifold_tag()))
+      {
+        std::cerr << "Error: Poisson reconstruction failed.\n";
+        return false;
+      }
+    }
+    catch (const std::exception &e)
+    {
+      std::cerr << "Exception during Poisson reconstruction: " << e.what() << "\n";
+      return false;
+    }
+    catch (...)
+    {
+      std::cerr << "Unknown exception during Poisson reconstruction.\n";
       return false;
     }
 
