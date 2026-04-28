@@ -4,6 +4,7 @@
 #include <CGAL/compute_average_spacing.h>
 #include <CGAL/extract_mean_curvature_flow_skeleton.h>
 #include <CGAL/IO/read_points.h>
+#include <CGAL/jet_smooth_point_set.h>
 #include <CGAL/mst_orient_normals.h>
 #include <CGAL/pca_estimate_normals.h>
 #include <CGAL/remove_outliers.h>
@@ -36,6 +37,12 @@ using Skeleton = Skeletonization::Skeleton;
 using Skeleton_vertex = Skeleton::vertex_descriptor;
 using Skeleton_edge = Skeleton::edge_descriptor;
 
+enum class Normal_neighborhood_mode
+{
+  fixed_k,
+  spacing_radius
+};
+
 /** \brief Runtime parameters for the point-cloud-to-skeleton pipeline. */
 struct Pipeline_options
 {
@@ -44,13 +51,17 @@ struct Pipeline_options
   double outlier_percent = 0.0;
   int outlier_neighbors = 24;
   int normal_estimation_neighbors = 24;
+  Normal_neighborhood_mode normal_neighborhood_mode = Normal_neighborhood_mode::fixed_k;
+  double normal_neighborhood_spacing_multiplier = 2.0;
   bool force_normal_estimation = false;
   bool keep_largest_component = true;
   bool enable_wlop = false;
+  bool enable_smoothing = false;
+  int smoothing_neighbors = 24;
 
   // wlop_retain_percent is the percentage of points to retain after WLOP simplification,
   // relative to the input point set size.
-  double wlop_retain_percent = 25.0;
+  double wlop_retain_percent = 20.0;
 
   // wlop_neighbor_radius is in the same units as the input point coordinates,
   // and should be set according to the point cloud density.
@@ -116,7 +127,10 @@ void print_usage(const char *exe_name)
   std::cerr << "Usage: " << exe_name
             << " [input_ply] [output_dir] [--remove-outliers-percent=VALUE]"
             << " [--outlier-neighbors=K] [--normal-estimation-neighbors=K]"
+            << " [--normal-neighborhood-mode=fixed-k|spacing-radius]"
+            << " [--normal-neighborhood-spacing-multiplier=VALUE]"
             << " [--force-estimate-normals] [--keep-all-components]"
+            << " [--enable-smoothing] [--smoothing-neighbors=K]"
             << " [--enable-wlop] [--wlop-retain-percent=VALUE]"
             << " [--wlop-neighbor-radius=VALUE] [--wlop-iterations=N]"
             << " [--wlop-require-uniform-sampling]\n";
@@ -172,6 +186,34 @@ bool parse_args(const int argc, char *argv[], Pipeline_options &options)
         return false;
       }
     }
+    else if (arg.rfind("--normal-neighborhood-mode=", 0) == 0)
+    {
+      const std::string value = arg.substr(std::string("--normal-neighborhood-mode=").size());
+      if (value == "fixed-k")
+      {
+        options.normal_neighborhood_mode = Normal_neighborhood_mode::fixed_k;
+      }
+      else if (value == "spacing-radius")
+      {
+        options.normal_neighborhood_mode = Normal_neighborhood_mode::spacing_radius;
+      }
+      else
+      {
+        std::cerr << "Error: --normal-neighborhood-mode must be fixed-k or spacing-radius.\n";
+        return false;
+      }
+    }
+    else if (arg.rfind("--normal-neighborhood-spacing-multiplier=", 0) == 0)
+    {
+      options.normal_neighborhood_spacing_multiplier =
+          std::stod(arg.substr(std::string("--normal-neighborhood-spacing-multiplier=").size()));
+      if (!std::isfinite(options.normal_neighborhood_spacing_multiplier) ||
+          options.normal_neighborhood_spacing_multiplier <= 0.0)
+      {
+        std::cerr << "Error: --normal-neighborhood-spacing-multiplier must be finite and > 0.\n";
+        return false;
+      }
+    }
     else if (arg == "--force-estimate-normals")
     {
       options.force_normal_estimation = true;
@@ -183,6 +225,20 @@ bool parse_args(const int argc, char *argv[], Pipeline_options &options)
     else if (arg == "--enable-wlop")
     {
       options.enable_wlop = true;
+    }
+    else if (arg == "--enable-smoothing")
+    {
+      options.enable_smoothing = true;
+    }
+    else if (arg.rfind("--smoothing-neighbors=", 0) == 0)
+    {
+      options.smoothing_neighbors = std::stoi(arg.substr(std::string("--smoothing-neighbors=").size()));
+      options.enable_smoothing = true;
+      if (options.smoothing_neighbors < 2)
+      {
+        std::cerr << "Error: --smoothing-neighbors must be >= 2.\n";
+        return false;
+      }
     }
     else if (arg.rfind("--wlop-retain-percent=", 0) == 0)
     {
@@ -283,11 +339,11 @@ Output_paths make_output_paths(const Pipeline_options &options)
 std::size_t count_near_zero_normals(const std::vector<Pwn> &points)
 {
   std::size_t zero_normals = 0;
-  const double eps = std::numeric_limits<double>::epsilon();
+  constexpr double k_min_normal_sq_len = 1e-12;
   for (const Pwn &pwn : points)
   {
     if (!std::isfinite(pwn.second.x()) || !std::isfinite(pwn.second.y()) || !std::isfinite(pwn.second.z()) ||
-        pwn.second.squared_length() <= eps)
+        pwn.second.squared_length() <= k_min_normal_sq_len)
     {
       ++zero_normals;
     }
@@ -306,7 +362,7 @@ bool validate_point_set(const std::vector<Pwn> &points,
     return false;
   }
 
-  const double eps = std::numeric_limits<double>::epsilon();
+  constexpr double k_min_normal_sq_len = 1e-12;
   for (std::size_t index = 0; index < points.size(); ++index)
   {
     const Pwn &pwn = points[index];
@@ -322,7 +378,7 @@ bool validate_point_set(const std::vector<Pwn> &points,
       return false;
     }
 
-    if (require_oriented_normals && pwn.second.squared_length() <= eps)
+    if (require_oriented_normals && pwn.second.squared_length() <= k_min_normal_sq_len)
     {
       std::cerr << "Error: " << context << " contains a zero-length normal at index " << index << ".\n";
       return false;
@@ -351,7 +407,10 @@ bool validate_average_spacing(const double average_spacing, const char *context)
  * Points that cannot be oriented (e.g., due to ambiguous local geometry) are removed from the set,
  * as they can cause issues in Poisson reconstruction.
  */
-bool estimate_and_orient_normals(std::vector<Pwn> &points, const int requested_neighbors)
+bool estimate_and_orient_normals(std::vector<Pwn> &points,
+                                 const int requested_neighbors,
+                                 const Normal_neighborhood_mode neighborhood_mode,
+                                 const double spacing_multiplier)
 {
   if (!validate_point_set(points, "normal estimation input", false))
   {
@@ -368,10 +427,41 @@ bool estimate_and_orient_normals(std::vector<Pwn> &points, const int requested_n
     return false;
   }
 
-  CGAL::pca_estimate_normals<CGAL::Sequential_tag>(
-      points,
-      neighbors,
-      CGAL::parameters::point_map(Point_map()).normal_map(Normal_map()));
+  double spacing_for_radius = 0.0;
+  if (neighborhood_mode == Normal_neighborhood_mode::spacing_radius)
+  {
+    spacing_for_radius = CGAL::compute_average_spacing<CGAL::Sequential_tag>(
+        points,
+        std::min<unsigned int>(neighbors, 12U),
+        CGAL::parameters::point_map(Point_map()));
+
+    if (!std::isfinite(spacing_for_radius) || spacing_for_radius <= 0.0)
+    {
+      std::cerr << "Error: cannot derive a valid spacing for radius-based normal estimation.\n";
+      return false;
+    }
+  }
+
+  if (neighborhood_mode == Normal_neighborhood_mode::spacing_radius)
+  {
+    const double radius = spacing_multiplier * spacing_for_radius;
+    CGAL::pca_estimate_normals<CGAL::Sequential_tag>(
+        points,
+        neighbors,
+        CGAL::parameters::point_map(Point_map())
+            .normal_map(Normal_map())
+            .neighbor_radius(radius));
+    std::cout << "Normal estimation radius: " << radius
+              << " (spacing=" << spacing_for_radius
+              << ", multiplier=" << spacing_multiplier << ")\n";
+  }
+  else
+  {
+    CGAL::pca_estimate_normals<CGAL::Sequential_tag>(
+        points,
+        neighbors,
+        CGAL::parameters::point_map(Point_map()).normal_map(Normal_map()));
+  }
 
   const auto unoriented_begin = CGAL::mst_orient_normals(
       points,
@@ -395,6 +485,32 @@ bool estimate_and_orient_normals(std::vector<Pwn> &points, const int requested_n
   std::cout << "Normal estimation/orientation neighbors: " << neighbors << "\n";
   std::cout << "Points after orientation: " << points.size() << "\n";
   return true;
+}
+
+bool smooth_points(std::vector<Pwn> &points, const int requested_neighbors)
+{
+  if (!validate_point_set(points, "smoothing input", false))
+  {
+    return false;
+  }
+
+  const std::size_t max_neighbors = points.size() - 1;
+  const unsigned int neighbors = static_cast<unsigned int>(
+      std::min<std::size_t>(static_cast<std::size_t>(requested_neighbors), max_neighbors));
+
+  if (neighbors < 2)
+  {
+    std::cerr << "Error: smoothing requires at least 2 neighbors.\n";
+    return false;
+  }
+
+  CGAL::jet_smooth_point_set<CGAL::Sequential_tag>(
+      points,
+      neighbors,
+      CGAL::parameters::point_map(Point_map()));
+
+  std::cout << "Smoothing neighbors: " << neighbors << "\n";
+  return validate_point_set(points, "post-smoothing point set", false);
 }
 
 /** \brief Loads an oriented point cloud from PLY and validates normals availability.
@@ -505,8 +621,8 @@ bool apply_wlop_downsampling(std::vector<Pwn> &points, const Pipeline_options &o
 
 /** \brief Applies optional point-cloud filtering and computes average spacing.
  *
- * This function performs WLOP, optional outlier removal, normal estimation, and average spacing computation
- * in that order.
+ * This function performs outlier removal, optional WLOP, optional smoothing,
+ * normal estimation/orientation, and average spacing computation in that order.
  */
 bool preprocess_points(std::vector<Pwn> &points,
                        const Pipeline_options &options,
@@ -517,27 +633,9 @@ bool preprocess_points(std::vector<Pwn> &points,
     return false;
   }
 
-  if (options.enable_wlop)
-  {
-    log_stage("1.2 WLOP downsampling");
-    if (!apply_wlop_downsampling(points, options))
-    {
-      return false;
-    }
-  }
-  else
-  {
-    std::cout << "WLOP downsampling: disabled.\n";
-  }
-
-  if (!validate_point_set(points, "post-WLOP point set", false))
-  {
-    return false;
-  }
-
   if (options.outlier_percent > 0.0)
   {
-    log_stage("1.3 Outlier removal");
+    log_stage("1.2 Outlier removal");
     const auto first_to_remove = CGAL::remove_outliers<CGAL::Sequential_tag>(
         points,
         options.outlier_neighbors,
@@ -557,10 +655,48 @@ bool preprocess_points(std::vector<Pwn> &points,
     return false;
   }
 
+  if (options.enable_wlop)
+  {
+    log_stage("1.3 WLOP downsampling");
+    if (options.wlop_retain_percent < 10.0)
+    {
+      std::cout << "Warning: WLOP retain percent is very low and may destabilize Poisson reconstruction.\n";
+    }
+    if (!apply_wlop_downsampling(points, options))
+    {
+      return false;
+    }
+  }
+  else
+  {
+    std::cout << "WLOP downsampling: disabled.\n";
+  }
+
+  if (!validate_point_set(points, "post-WLOP point set", false))
+  {
+    return false;
+  }
+
+  if (options.enable_smoothing)
+  {
+    log_stage("1.4 Jet smoothing");
+    if (!smooth_points(points, options.smoothing_neighbors))
+    {
+      return false;
+    }
+  }
+  else
+  {
+    std::cout << "Smoothing: disabled.\n";
+  }
+
   if (options.force_normal_estimation || count_near_zero_normals(points) > 0)
   {
-    log_stage("1.4 Estimate + orient normals");
-    if (!estimate_and_orient_normals(points, options.normal_estimation_neighbors))
+    log_stage("1.5 Estimate + orient normals");
+    if (!estimate_and_orient_normals(points,
+                                     options.normal_estimation_neighbors,
+                                     options.normal_neighborhood_mode,
+                                     options.normal_neighborhood_spacing_multiplier))
     {
       return false;
     }
@@ -575,7 +711,7 @@ bool preprocess_points(std::vector<Pwn> &points,
     return false;
   }
 
-  log_stage("1.5 Average spacing");
+  log_stage("1.6 Average spacing");
   average_spacing = CGAL::compute_average_spacing<CGAL::Sequential_tag>(
       points,
       6,
@@ -815,7 +951,7 @@ int main(int argc, char *argv[])
   if (!write_point_stage_visualization(
           output_paths.preprocessed_points,
           points,
-          "1.3 Visualize preprocessed point cloud"))
+      "1.7 Visualize preprocessed point cloud"))
   {
     return EXIT_FAILURE;
   }

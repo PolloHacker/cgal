@@ -41,7 +41,10 @@ namespace mesh_reconstruction
       return false;
     }
 
-    const double eps = std::numeric_limits<double>::epsilon();
+    constexpr double k_min_normal_sq_len = 1e-12;
+    std::size_t weak_normal_count = 0;
+    double min_normal_sq_len = std::numeric_limits<double>::max();
+
     for (std::size_t index = 0; index < points.size(); ++index)
     {
       const Pwn &pwn = points[index];
@@ -51,13 +54,25 @@ namespace mesh_reconstruction
         return false;
       }
 
+      const double normal_sq_len = pwn.second.squared_length();
       if (!std::isfinite(pwn.second.x()) || !std::isfinite(pwn.second.y()) || !std::isfinite(pwn.second.z()) ||
-          pwn.second.squared_length() <= eps)
+          !std::isfinite(normal_sq_len) || normal_sq_len <= k_min_normal_sq_len)
       {
         std::cerr << "Error: Poisson reconstruction requires finite, non-zero normals at index " << index << ".\n";
         return false;
       }
+
+      min_normal_sq_len = std::min(min_normal_sq_len, normal_sq_len);
+      if (normal_sq_len <= 1e-8)
+      {
+        ++weak_normal_count;
+      }
     }
+
+    std::cout << "Poisson precheck: points=" << points.size()
+              << ", avg_spacing=" << average_spacing
+              << ", min_normal_sq_len=" << min_normal_sq_len
+              << ", weak_normals(<=1e-8)=" << weak_normal_count << "\n";
 
     try
     {
