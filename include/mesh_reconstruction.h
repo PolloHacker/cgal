@@ -3,14 +3,13 @@
 #include <filesystem>
 #include <vector>
 
-#include <CGAL/Simple_cartesian.h>
+#include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
 #include <CGAL/Surface_mesh.h>
 #include <CGAL/property_map.h>
 
-namespace mesh_reconstruction
-{
+namespace mesh_reconstruction {
 /** \brief Kernel used by the reconstruction and skeletonization pipeline. */
-using Kernel = CGAL::Simple_cartesian<double>;
+using Kernel = CGAL::Exact_predicates_inexact_constructions_kernel;
 
 /** \brief Concurrency tag for parallel execution. */
 using Concurrency_tag = CGAL::Parallel_if_available_tag;
@@ -34,25 +33,28 @@ using Normal_map = CGAL::Second_of_pair_property_map<Pwn>;
 using Triangle_mesh = CGAL::Surface_mesh<Point>;
 
 /**
- * \brief Reconstructs a surface mesh from oriented points using CGAL Poisson reconstruction.
- * \param points Input oriented points.
- * \param average_spacing Characteristic spacing used to scale reconstruction parameters.
- * \param mesh Output mesh.
- * \return `true` when reconstruction succeeds.
+ * \brief Reconstructs a surface mesh from oriented points using CGAL Poisson
+ * reconstruction. \param points Input oriented points. \param average_spacing
+ * Characteristic spacing used to scale reconstruction parameters. \param mesh
+ * Output mesh. \return `true` when reconstruction succeeds.
  */
-bool reconstruct_mesh_poisson(const std::vector<Pwn>& points,
-                              double average_spacing,
-                              Triangle_mesh& mesh);
+bool reconstruct_mesh_poisson(const std::vector<Pwn> &points,
+                              double average_spacing, Triangle_mesh &mesh,
+                              double sm_angle, double sm_radius,
+                              double sm_distance);
 
 /**
  * \brief Enforces skeletonization preconditions on a reconstructed mesh.
- * \details This routine validates the mesh, triangulates faces, optionally keeps only the largest
- * connected component, fills boundary holes, and stitches borders so the result is closed.
- * \param mesh Reconstructed mesh to normalize.
- * \param keep_largest_component If `true`, keeps only the largest connected component.
+ * \details This routine validates the mesh, triangulates faces, optionally
+ * keeps only the largest connected component, fills boundary holes, and
+ * stitches borders so the result is closed. 
+ * \param mesh Reconstructed mesh to normalize. 
+ * \param keep_largest_component If `true`, keeps only the largest
+ * connected component. 
  * \return `true` when the mesh is triangulated and closed.
  */
-bool normalize_mesh_for_skeletonization(Triangle_mesh& mesh, bool keep_largest_component);
+bool normalize_mesh_for_skeletonization(Triangle_mesh &mesh,
+                                        bool keep_largest_component);
 
 /**
  * \brief Writes a mesh snapshot to an ASCII PLY file for visualization.
@@ -60,6 +62,7 @@ bool normalize_mesh_for_skeletonization(Triangle_mesh& mesh, bool keep_largest_c
  * \param mesh Mesh to serialize.
  * \return `true` when serialization succeeds.
  */
-bool write_mesh_ply(const std::filesystem::path& output_mesh_path, const Triangle_mesh& mesh);
+bool write_mesh_ply(const std::filesystem::path &output_mesh_path,
+                    const Triangle_mesh &mesh);
 
 } // namespace mesh_reconstruction
