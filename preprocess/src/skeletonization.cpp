@@ -58,6 +58,7 @@ int main(int argc, char *argv[]) {
     return EXIT_FAILURE;
   }
 
+  /*
   Triangle_mesh mesh;
 
   log_stage("2. Poisson reconstruction");
@@ -94,6 +95,7 @@ int main(int argc, char *argv[]) {
   if (!write_skeleton_outputs(output_paths, skeleton, mesh)) {
     return EXIT_FAILURE;
   }
+  */
 
   std::cout << "\nPipeline completed successfully.\n";
   return EXIT_SUCCESS;
