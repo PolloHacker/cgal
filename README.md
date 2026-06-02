@@ -1,85 +1,85 @@
-# CGAL Point Cloud Skeletonization
+# Package for preprocessing point cloud and estimating normals
 
-Este projeto converte nuvens de pontos orientadas em uma malha triangular fechada e extrai um esqueleto topo-geométrico usando as ferramentas CGAL.
+# wnnc
 
-## Etapas do pipeline
+Este projeto utiliza o [uv](https://github.com) para gerenciamento rápido de ambientes virtuais e dependências Python, integrado com extensões C++/CUDA empacotadas via `setuptools`.
 
-1. **Leitura da nuvem de pontos**
-   - O pipeline carrega arquivos PLY contendo pontos 3D e, opcionalmente, normais.
-   - Se as normais não estiverem disponíveis, os pontos são carregados sem normais e o pipeline pode estimá-las mais tarde.
+## Como Iniciar do Zero
 
-2. **Pré-processamento do ponto**
-   - Remove outliers com base em distância local e porcentagem configurável.
-   - Opcionalmente, aplica WLOP para simplificação e regularização da nuvem de pontos.
-   - Opcionalmente, aplica suavização por jato (jet smoothing).
-   - Estima e orienta normais usando PCA + MST quando necessário.
-   - Calcula o espaçamento médio dos pontos para ajustar parâmetros de reconstrução.
+Como o projeto possui dependências complexas de compilação C++ que importam o PyTorch diretamente no processo de build, a instalação deve ignorar o isolamento de build padrão do Python.
 
-3. **Reconstrução de malha**
-   - Gera uma malha triangular a partir dos pontos orientados usando a reconstrução de superfície de Poisson.
-   - Usa parâmetros configuráveis de ângulo, raio e distância para controlar a qualidade da malha.
-
-4. **Normalização de malha**
-   - Triangula qualquer face não triangular.
-   - Remove componentes desconectados menores, se configurado.
-   - Preenche buracos de borda e costura fronteiras para garantir que a malha seja fechada.
-
-5. **Extração do esqueleto**
-   - Executa o algoritmo de fluxo de curvatura média sobre a malha fechada.
-   - Produz um grafo esquelético com vértices e arestas embutidos na geometria.
-
-6. **Exportação de resultados**
-   - Salva o ponto bruto carregado e o ponto pré-processado como PLY.
-   - Exporta a malha reconstruída antes e depois da normalização.
-   - Salva o esqueleto como polilinhas máximas, lista de arestas e correspondência vértice-malha.
-
-## Tecnologias usadas
-
-- **CGAL**: algoritmo de reconstrução de superfície Poisson, estimativa de normais, remoção de outliers, suavização de pontos, WLOP e extração de esqueleto por fluxo de curvatura média.
-- **Eigen3**: suporte a solvers esparsos necessários para a reconstrução de Poisson.
-- **TBB**: paralelização de diversas etapas do pipeline.
-- **CMake**: gerenciamento de build e dependências.
-
-## Como usar
-
-### Build
+Siga os passos abaixo para criar o ambiente e instalar o projeto em modo editável:
 
 ```bash
-mkdir -p build
-cd build
-cmake ..
-cmake --build .
+# 1. Certifique-se de que possui o uv instalado
+# (Caso não tenha: curl -sSf https://astral.sh | sh)
+
+# 2. Sincronize e monte todo o ambiente virtual automaticamente
+uv sync
+cd wnnc/ext
+uv run pip install -e . --no-build-isolation
 ```
 
-### Run
+O comando `uv sync` cuidará de criar a pasta `.venv`, baixar as versões exatas do PyTorch para a GPU e compilar a extensão local.
+
+
+### Preprocess
+
+Para compilar este programa, basta usar o `CMakeLists.txt` dentro da pasta `preprocess`. O binário estará na pasta `build` na raiz do projeto.
+
+### AdaptiveSolvers
+
+Esta pasta cuida da implementação do Poisson Reconstruction segundo [ KAZHDAN](https://github.com/mkazhdan/PoissonRecon). Para compilar e obter o binário `PoissonRecon`, faça:
 
 ```bash
-./skeletonization <input_ply> <output_dir> [opções]
+sudo apt-get update
+sudo apt-get install libjpeg-dev libturbojpeg0-dev ^Cib1g-dev libpng-dev
+
+cd AdaptiveSolvers
+mkdir JPEG
+mkdir JPEG-turbo
+mkdir PNG
+mkdir ZLIB
+
+make
+```
+Após algum tempo de compilação, um erro ocorrerá, mas o `PoissonRecon` terá sido compilado corretamente dentro de `Bin/Linux`.
+
+---
+
+## Detalhes de Configuração (`pyproject.toml`)
+
+Se você precisar ajustar ou entender como o ambiente foi configurado, estas são as seções críticas do `pyproject.toml`:
+
+### 1. Vínculo com CUDA 12.8 (Aceleração por Hardware)
+Para evitar conflitos de versão entre o binário do PyTorch e o toolkit do sistema, o projeto aponta diretamente para o repositório oficial de wheels compiladas para **CUDA 12.8**:
+
+```toml
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://pytorch.org"
+explicit = true  # Evita que outros pacotes busquem neste índice
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
+torchaudio = { index = "pytorch-cu128" }
 ```
 
-### Exemplo
+### 2. Dependências de Build (`extra-build-dependencies`)
+Alguns scripts internos de compilação exigem que o `torch` e o `numpy` estejam disponíveis imediatamente antes de iniciar o processo de empacotamento:
+
+```toml
+[tool.uv.extra-build-dependencies]
+wnnc = ["torch", "numpy", "setuptools"]
+```
+
+---
+
+## Ativando o Ambiente
+
+Sempre que abrir um novo terminal e quiser rodar os scripts do projeto, ative o ambiente virtual gerado:
 
 ```bash
-./skeletonization input/model.ply skeleton_output
+source .venv/bin/activate
 ```
-
-### Opções principais
-
-- `--remove-outliers-percent=VALUE`
-- `--outlier-neighbors=K`
-- `--normal-estimation-neighbors=K`
-- `--normal-neighborhood-mode=fixed-k|spacing-radius`
-- `--force-estimate-normals`
-- `--keep-all-components`
-- `--enable-smoothing`
-- `--smoothing-neighbors=K`
-- `--enable-wlop`
-- `--wlop-retain-percent=VALUE`
-- `--wlop-neighbor-radius=VALUE`
-- `--wlop-iterations=N`
-- `--wlop-require-uniform-sampling`
-- `--sm_angle=VALUE`
-- `--sm_radius=VALUE`
-- `--sm_distance=VALUE`
-
-> A execução cria um subdiretório em `output_dir` com o nome do arquivo de entrada e escreve os artefatos do pipeline nesse local.
