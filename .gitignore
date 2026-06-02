@@ -1,5 +1,8 @@
 build/
 skeleton_output/
+pipeline_output/
 input/
+AdaptiveSolvers/Bin/
 
 .vscode/
+.venv/
