@@ -9,8 +9,7 @@ def run_pipeline(input_ply: str, output_root: str, skeletonization_bin: str, mai
     
     1) Run C++ skeletonization tool for point preprocessing.
     2) Run WNNC to estimate/refine normals.
-    3) Run Screened Poisson Reconstruction (re-invoking the C++ binary with normals or 
-       using a python wrapper).
+    3) Run Screened Poisson Reconstruction.
     """
     input_path = Path(input_ply)
     if not input_path.exists():
