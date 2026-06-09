@@ -43,7 +43,7 @@ else
 	LFLAGS += -lstdc++
 endif
 LFLAGS_IMG += -lz -lpng -ljpeg
-LFLAGS += -fopenmp
+#LFLAGS += -ljpeg -lmypng -lz
 
 CFLAGS_DEBUG = -DDEBUG -g3
 LFLAGS_DEBUG =
@@ -59,7 +59,7 @@ BIN = Bin/Linux/
 INCLUDE = .
 
 ifeq ($(COMPILER),gcc)
-	CC=g++
+	CC=gcc
 	CXX=g++
 else ifeq ($(COMPILER),gcc-11)
 	CC=gcc-11
@@ -210,12 +210,14 @@ clean:
 	rm -rf $(RE_OBJECTS)
 	rm -rf $(PTD_OBJECTS)
 	rm -rf $(SN_OBJECTS)
+	cd PNG  && $(MAKE) clean
 
 make_dir:
 	$(MD) -p $(BIN)
 
 $(BIN)$(PR_TARGET): $(PR_OBJECTS)
-
+	cd PNG  && $(MAKE) COMPILER=$(COMPILER)
+	$(CXX) -pthread -o $@ $(PR_OBJECTS) -L$(BIN) $(LFLAGS) $(LFLAGS_IMG)
 
 $(BIN)$(PRC_TARGET): $(PRC_OBJECTS)
 	$(CXX) -pthread -o $@ $(PRC_OBJECTS) -L$(BIN) -lboost_system $(LFLAGS)
@@ -224,10 +226,12 @@ $(BIN)$(PRS_TARGET): $(PRS_OBJECTS)
 	$(CXX) -pthread -o $@ $(PRS_OBJECTS) -L$(BIN) -lboost_system $(LFLAGS)
 
 $(BIN)$(SR_TARGET): $(SR_OBJECTS)
-
+	cd PNG  && $(MAKE) COMPILER=$(COMPILER)
+	$(CXX) -pthread -o $@ $(SR_OBJECTS) -L$(BIN) $(LFLAGS) $(LFLAGS_IMG)
 
 $(BIN)$(PI_TARGET): $(PI_OBJECTS)
-
+	cd PNG  && $(MAKE) COMPILER=$(COMPILER)
+	$(CXX) -pthread -o $@ $(PI_OBJECTS) -L$(BIN) $(LFLAGS) $(LFLAGS_IMG)
 
 $(BIN)$(ST_TARGET): $(ST_OBJECTS)
 	$(CXX) -pthread -o $@ $(ST_OBJECTS) $(LFLAGS)
@@ -236,13 +240,16 @@ $(BIN)$(EH_TARGET): $(EH_OBJECTS)
 	$(CXX) -pthread -o $@ $(EH_OBJECTS) $(LFLAGS)
 
 $(BIN)$(IS_TARGET): $(IS_OBJECTS)
-
+	cd PNG  && $(MAKE) COMPILER=$(COMPILER)
+	$(CXX) -pthread -o $@ $(IS_OBJECTS) -L$(BIN) $(LFLAGS) $(LFLAGS_IMG)
 
 $(BIN)$(AV_TARGET): $(AV_OBJECTS)
-
+	cd PNG  && $(MAKE) COMPILER=$(COMPILER)
+	$(CXX) -pthread -o $@ $(AV_OBJECTS) -L$(BIN) $(LFLAGS) $(LFLAGS_IMG)
 
 $(BIN)$(CP_TARGET): $(CP_OBJECTS)
-
+	cd PNG  && $(MAKE) COMPILER=$(COMPILER)
+	$(CXX) -pthread -o $@ $(CP_OBJECTS) -L$(BIN) $(LFLAGS) $(LFLAGS_IMG)
 
 $(BIN)$(RE_TARGET): $(RE_OBJECTS)
 	$(CXX) -pthread -o $@ $(RE_OBJECTS) -L$(BIN) $(LFLAGS) $(LFLAGS_IMG)
@@ -258,4 +265,3 @@ $(BIN)%.o: $(SRC)%.c
 
 $(BIN)%.o: $(SRC)%.cpp
 	$(CXX) -c -o $@ $(CFLAGS) -I$(INCLUDE) $<
-
