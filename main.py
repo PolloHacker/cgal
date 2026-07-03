@@ -3,7 +3,14 @@ import subprocess
 import sys
 from pathlib import Path
 
-def run_pipeline(input_ply: str, output_root: str, skeletonization_bin: str, main_wnnc_py: str, poisson_recon_bin: str) -> bool:
+def run_pipeline(
+        input_ply: str, 
+        output_root: str, 
+        skeletonization_bin: str, 
+        main_wnnc_py: str, 
+        poisson_recon_bin: str,
+        surface_trimmer_bin: str
+        ) -> bool:
     """
     Executes the 3-step point cloud processing pipeline.
     
@@ -21,8 +28,9 @@ def run_pipeline(input_ply: str, output_root: str, skeletonization_bin: str, mai
     stage1_dir = output_root_path / "stage1_preprocess"
     stage2_dir = output_root_path / "stage2_wnnc"
     stage3_dir = output_root_path / "stage3_surface"
+    stage4_dir = output_root_path / "stage4_trimmed"
     
-    for folder in [stage1_dir, stage2_dir, stage3_dir]:
+    for folder in [stage1_dir, stage2_dir, stage3_dir, stage4_dir]:
         folder.mkdir(parents=True, exist_ok=True)
 
     # -------------------------------------------------------------------------
@@ -36,11 +44,12 @@ def run_pipeline(input_ply: str, output_root: str, skeletonization_bin: str, mai
         skeletonization_bin,
         str(input_path),
         str(stage1_dir),
-        "--enable-smoothing",
-        "--outlier-neighbors=20",
-        "--enable-wlop",
-        "--wlop-require-uniform-sampling",
-        "--wlop-retain-percent=25"
+        "--normal-estimation-neighbors=20",
+        # "--enable-smoothing",
+        # "--outlier-neighbors=20",
+        # "--enable-wlop",
+        # "--wlop-require-uniform-sampling",
+        # "--wlop-retain-percent=95"
     ]
     
     print(f"Executing: {' '.join(cmd_stage1)}")
@@ -83,7 +92,7 @@ def run_pipeline(input_ply: str, output_root: str, skeletonization_bin: str, mai
         main_wnnc_py,
         str(preprocessed_ply), # Input
         "--out_dir", str(wnnc_output_dir),
-        "--width_config", "l4",  # Example width config, adjust as needed
+        "--width_config", "l1",  # Example width config, adjust as needed
         "--tqdm"
     ]
     
@@ -104,35 +113,73 @@ def run_pipeline(input_ply: str, output_root: str, skeletonization_bin: str, mai
     # STAGE 3: Screened Poisson Reconstruction (Kazhdan AdaptiveSolvers)
     # -------------------------------------------------------------------------
     print("\n>>> Running Stage 3: Kazhdan Screened Poisson Reconstruction...")
-    final_mesh_ply = str(os.path.join(stage3_dir, f"{input_stem}_watertight.ply"))
+    stage3_mesh_ply = str(os.path.join(stage3_dir, f"{input_stem}_watertight.ply"))
     
     # Key Poisson Arguments:
     # --in: Input points with normals (.xyz text or .ply work flawlessly)
     # --out: Target output path for the mesh (.ply format)
     # --depth: Maximum reconstruction tree depth (default is 8, 9-10 balances precision)
+    # --bType: Boundary type (0 = none, 1 = Dirichlet, 2 = Neumann)
+    # --samplesPerNode: Number of samples per node (default is 1.5, increase for better detail at cost of memory)
     cmd_stage3 = [
         poisson_recon_bin,
-        "--in", stage2_xyz_output,
-        "--out", final_mesh_ply,
-        "--depth", "10",
-        "--bType", "2"
+        "--in", str(stage2_xyz_output),
+        "--out", stage3_mesh_ply,
+        "--depth", "11",
+        "--bType", "2",
+        "--samplesPerNode", "8.0",
+        "--pointWeight", "4.0",
+        "--density"
     ]
     
-    print(f"Executing: {' '.join(str(cmd_stage3))}")
-    subprocess.run(cmd_stage3, capture_output=True, text=True, check=True)
-    print(f"\nPipeline successfully completed! Output mesh saved at: {final_mesh_ply}")
+    print(f"Executing: {' '.join(cmd_stage3)}")
+    res3 = subprocess.run(cmd_stage3, capture_output=True, text=True)
+
+    if res3.returncode != 0:
+        print("Error during Stage 3 Poisson Reconstruction:")
+        print(res3.stderr)
+        return False
+    print(res3.stdout)
+
+
+    # -------------------------------------------------------------------------
+    # STAGE 4: Surface Trimmer (Optional)
+    # -------------------------------------------------------------------------
+
+    print("\n>>> Running Stage 4: Surface Trimming...")
+
+    stage4_mesh_ply = str(stage4_dir / f"{input_stem}_watertight_trimmed.ply")
+
+    cmd_stage4 = [
+        surface_trimmer_bin,
+        "--in", stage3_mesh_ply,
+        "--out", stage4_mesh_ply,
+        "--trim", "7"  # Adjust trim threshold as needed
+    ]
+
+    print(f"Executing: {' '.join(cmd_stage4)}")
+    res4 = subprocess.run(cmd_stage4, capture_output=True, text=True)
+
+    if res4.returncode != 0:
+        print("Error during Stage 4 Surface Trimming:")
+        print(res4.stderr)
+        return False
+    print(res4.stdout)
+
+    print(f"\nPipeline successfully completed! Output mesh saved at: {stage3_mesh_ply}")
     
     return True
 
 
 if __name__ == "__main__":
-    INPUT_FILE = "input/BaumeDeLongeaigue.ply"
+    INPUT_FILE = "input/diaclase.ply"
     OUTPUT_DIR = "pipeline_output"
     SKELETON_EXE = "./build/skeletonization" 
     WNNC_SCRIPT = "wnnc/main_wnnc.py"
     KAZHDAN_POISSON_EXE = "AdaptiveSolvers/Bin/Linux/PoissonRecon"
+    KAZHDAN_SURFACE_TRIMMER_EXE = "AdaptiveSolvers/Bin/Linux/SurfaceTrimmer"
     
-    success = run_pipeline(INPUT_FILE, OUTPUT_DIR, SKELETON_EXE, WNNC_SCRIPT, KAZHDAN_POISSON_EXE)
+    success = run_pipeline(INPUT_FILE, OUTPUT_DIR, SKELETON_EXE, WNNC_SCRIPT, KAZHDAN_POISSON_EXE, KAZHDAN_SURFACE_TRIMMER_EXE)
     if success:
         print("\nPipeline execution sequence completed successfully!")
     else:
