@@ -25,96 +25,6 @@ using Normal_map = mesh_reconstruction::Normal_map;
 
 namespace {
 
-std::size_t count_near_zero_normals(const std::vector<Pwn> &points) {
-  std::size_t zero_normals = 0;
-  constexpr double k_min_normal_sq_len = 1e-12;
-  for (const Pwn &pwn : points) {
-    if (!std::isfinite(pwn.second.x()) || !std::isfinite(pwn.second.y()) ||
-        !std::isfinite(pwn.second.z()) ||
-        pwn.second.squared_length() <= k_min_normal_sq_len) {
-      ++zero_normals;
-    }
-  }
-  return zero_normals;
-}
-
-bool estimate_and_orient_normals(
-    std::vector<Pwn> &points, const int requested_neighbors,
-    const Normal_neighborhood_mode neighborhood_mode,
-    const double spacing_multiplier) {
-  if (!validate_point_set(points, "normal estimation input", false)) {
-    return false;
-  }
-
-  const std::size_t max_neighbors = points.size() - 1;
-  const unsigned int neighbors =
-      static_cast<unsigned int>(std::min<std::size_t>(
-          static_cast<std::size_t>(requested_neighbors), max_neighbors));
-
-  if (neighbors < 2) {
-    std::cerr << "Error: normal estimation requires at least 2 neighbors.\n";
-    return false;
-  }
-
-  double spacing_for_radius = 0.0;
-  if (neighborhood_mode == Normal_neighborhood_mode::spacing_radius) {
-    spacing_for_radius = compute_average_spacing(points, neighbors, 12U);
-
-    if (!std::isfinite(spacing_for_radius) || spacing_for_radius <= 0.0) {
-      std::cerr << "Error: cannot derive a valid spacing for radius-based "
-                   "normal estimation.\n";
-      return false;
-    }
-  }
-
-  // Estimates normals using PCA.
-  // The neighborhood can be defined either by a fixed number of neighbors
-  // (knn) or by a radius based on the average spacing.
-  if (neighborhood_mode == Normal_neighborhood_mode::spacing_radius) {
-    // If we use the average spacing, the algorithm will consider
-    // all neighbors within radius = spacing_multiplier * average_spacing.
-    const double radius = spacing_multiplier * spacing_for_radius;
-    CGAL::pca_estimate_normals<CGAL::Parallel_tag>(
-        points, neighbors,
-        CGAL::parameters::point_map(Point_map())
-            .normal_map(Normal_map())
-            .neighbor_radius(radius));
-    std::cout << "Normal estimation radius: " << radius
-              << " (spacing=" << spacing_for_radius
-              << ", multiplier=" << spacing_multiplier << ")\n";
-  } else {
-    // If we use a fixed number of neighbors, the algorithm will consider
-    // the k nearest neighbors for each point.
-    CGAL::pca_estimate_normals<CGAL::Parallel_tag>(
-        points, neighbors,
-        CGAL::parameters::point_map(Point_map()).normal_map(Normal_map()));
-  }
-
-  const auto unoriented_begin = CGAL::mst_orient_normals(
-      points, neighbors,
-      CGAL::parameters::point_map(Point_map()).normal_map(Normal_map()));
-
-  // Remove points with unoriented normals, as they can cause issues in Poisson
-  // reconstruction.
-  const std::size_t unoriented_count =
-      static_cast<std::size_t>(std::distance(unoriented_begin, points.end()));
-
-  if (unoriented_count > 0) {
-    points.erase(unoriented_begin, points.end());
-    std::cout << "Normal orientation: removed " << unoriented_count
-              << " point(s) with ambiguous orientation.\n";
-  }
-
-  if (points.size() < 3) {
-    std::cerr << "Error: too few oriented points after normal orientation.\n";
-    return false;
-  }
-
-  std::cout << "Normal estimation/orientation neighbors: " << neighbors << "\n";
-  std::cout << "Points after orientation: " << points.size() << "\n";
-  return true;
-}
-
 bool smooth_points(std::vector<Pwn> &points, const int requested_neighbors) {
   if (!validate_point_set(points, "smoothing input", false)) {
     return false;
@@ -289,20 +199,7 @@ bool preprocess_points(std::vector<Pwn> &points, const Pipeline_options &options
     std::cout << "Smoothing: disabled.\n";
   }
 
-  if (options.force_normal_estimation || count_near_zero_normals(points) > 0) {
-    log_stage("1.5 Estimate + orient normals");
-    if (!estimate_and_orient_normals(
-            points, options.normal_estimation_neighbors,
-            options.normal_neighborhood_mode,
-            options.normal_neighborhood_spacing_multiplier)) {
-      return false;
-    }
-  } else {
-    std::cout
-        << "Normal estimation: skipped; input normals are already usable.\n";
-  }
-
-  if (!validate_point_set(points, "oriented point set", true)) {
+  if (!validate_point_set(points, "preprocessed point set", false)) {
     return false;
   }
 

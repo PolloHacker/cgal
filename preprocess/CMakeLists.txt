@@ -87,13 +87,39 @@ endif()
 find_package(TBB REQUIRED)
 
 add_executable(
-  skeletonization
-  src/skeletonization.cpp
+  preprocessor
+  src/preprocessor.cpp
   src/pipeline_config.cpp
   src/point_cloud_processing.cpp
   src/io_visualization.cpp
+  src/mesh_reconstruction.cpp
+  src/validation.cpp
+)
+
+target_include_directories(preprocessor PRIVATE include)
+
+target_link_libraries(preprocessor PRIVATE 
+  CGAL::CGAL 
+  Eigen3::Eigen
+  TBB::tbb
+)
+
+target_compile_definitions(preprocessor PRIVATE 
+  CGAL_EIGEN3_ENABLED 
+  CGAL_LINKED_WITH_TBB 
+)
+
+if(TARGET CGAL::Eigen3_support)
+  target_link_libraries(preprocessor PRIVATE CGAL::Eigen3_support)
+endif()
+
+
+add_executable(
+  skeletonization
+  src/skeletonization.cpp
   src/skeleton_extraction.cpp
   src/mesh_reconstruction.cpp
+  src/io_visualization.cpp
   src/validation.cpp
 )
 
@@ -110,7 +136,6 @@ target_compile_definitions(skeletonization PRIVATE
   CGAL_LINKED_WITH_TBB 
 )
 
-# CGAL packages used here rely on Eigen-based sparse solvers.
 if(TARGET CGAL::Eigen3_support)
   target_link_libraries(skeletonization PRIVATE CGAL::Eigen3_support)
 endif()

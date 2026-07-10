@@ -43,7 +43,6 @@ mkdir ZLIB
 
 make
 ```
-Após algum tempo de compilação, um erro ocorrerá, mas o `PoissonRecon` terá sido compilado corretamente dentro de `Bin/Linux`.
 
 ---
 

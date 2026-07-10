@@ -6,10 +6,11 @@ from pathlib import Path
 def run_pipeline(
         input_ply: str, 
         output_root: str, 
-        skeletonization_bin: str, 
+        preprocessor_bin: str, 
         main_wnnc_py: str, 
         poisson_recon_bin: str,
-        surface_trimmer_bin: str
+        surface_trimmer_bin: str,
+        skeletonization_bin: str
         ) -> bool:
     """
     Executes the 3-step point cloud processing pipeline.
@@ -29,6 +30,7 @@ def run_pipeline(
     stage2_dir = output_root_path / "stage2_wnnc"
     stage3_dir = output_root_path / "stage3_surface"
     stage4_dir = output_root_path / "stage4_trimmed"
+    stage5_dir = output_root_path / "stage5_skeleton"
     
     for folder in [stage1_dir, stage2_dir, stage3_dir, stage4_dir]:
         folder.mkdir(parents=True, exist_ok=True)
@@ -41,10 +43,9 @@ def run_pipeline(
     # Run preprocessing with the skeletonization binary. 
     # Adjust flags as needed based on your requirements.
     cmd_stage1 = [
-        skeletonization_bin,
+        preprocessor_bin,
         str(input_path),
         str(stage1_dir),
-        "--normal-estimation-neighbors=20",
         # "--enable-smoothing",
         # "--outlier-neighbors=20",
         # "--enable-wlop",
@@ -92,7 +93,7 @@ def run_pipeline(
         main_wnnc_py,
         str(preprocessed_ply), # Input
         "--out_dir", str(wnnc_output_dir),
-        "--width_config", "l1",  # Example width config, adjust as needed
+        "--width_config", "l0",  # Example width config, adjust as needed
         "--tqdm"
     ]
     
@@ -125,10 +126,10 @@ def run_pipeline(
         poisson_recon_bin,
         "--in", str(stage2_xyz_output),
         "--out", stage3_mesh_ply,
-        "--depth", "11",
+        "--depth", "12",
         "--bType", "2",
-        "--samplesPerNode", "8.0",
-        "--pointWeight", "4.0",
+        "--samplesPerNode", "1.5",
+        "--pointWeight", "2.0",
         "--density"
     ]
     
@@ -154,7 +155,7 @@ def run_pipeline(
         surface_trimmer_bin,
         "--in", stage3_mesh_ply,
         "--out", stage4_mesh_ply,
-        "--trim", "7"  # Adjust trim threshold as needed
+        "--trim", "7"
     ]
 
     print(f"Executing: {' '.join(cmd_stage4)}")
@@ -166,7 +167,31 @@ def run_pipeline(
         return False
     print(res4.stdout)
 
-    print(f"\nPipeline successfully completed! Output mesh saved at: {stage3_mesh_ply}")
+    # -------------------------------------------------------------------------
+    # STAGE 5: Skeletonization
+    # -------------------------------------------------------------------------
+    print("\n>>> Running Stage 5: Skeletonization...")
+    skeleton_output_prefix = str(stage5_dir / input_stem / input_stem)
+    # Make sure output subdir for skeleton exists
+    (stage5_dir / input_stem).mkdir(parents=True, exist_ok=True)
+
+    cmd_stage5 = [
+        skeletonization_bin,
+        stage3_mesh_ply,
+        skeleton_output_prefix
+    ]
+
+    print(f"Executing: {' '.join(cmd_stage5)}")
+    res5 = subprocess.run(cmd_stage5, capture_output=True, text=True)
+
+    if res5.returncode != 0:
+        print("Error during Stage 5 Skeletonization:")
+        print(res5.stderr)
+        return False
+    print(res5.stdout)
+
+    print(f"\nPipeline successfully completed! Output mesh saved at: {stage4_mesh_ply}")
+    print(f"Skeleton files saved with prefix: {skeleton_output_prefix}")
     
     return True
 
@@ -174,12 +199,21 @@ def run_pipeline(
 if __name__ == "__main__":
     INPUT_FILE = "input/diaclase.ply"
     OUTPUT_DIR = "pipeline_output"
-    SKELETON_EXE = "./build/skeletonization" 
+    PREPROCESSOR_EXE = "./build/preprocessor" 
     WNNC_SCRIPT = "wnnc/main_wnnc.py"
     KAZHDAN_POISSON_EXE = "AdaptiveSolvers/Bin/Linux/PoissonRecon"
     KAZHDAN_SURFACE_TRIMMER_EXE = "AdaptiveSolvers/Bin/Linux/SurfaceTrimmer"
+    SKELETON_EXE = "./build/skeletonization"
     
-    success = run_pipeline(INPUT_FILE, OUTPUT_DIR, SKELETON_EXE, WNNC_SCRIPT, KAZHDAN_POISSON_EXE, KAZHDAN_SURFACE_TRIMMER_EXE)
+    success = run_pipeline(
+        INPUT_FILE, 
+        OUTPUT_DIR, 
+        PREPROCESSOR_EXE, 
+        WNNC_SCRIPT, 
+        KAZHDAN_POISSON_EXE, 
+        KAZHDAN_SURFACE_TRIMMER_EXE,
+        SKELETON_EXE
+    )
     if success:
         print("\nPipeline execution sequence completed successfully!")
     else:

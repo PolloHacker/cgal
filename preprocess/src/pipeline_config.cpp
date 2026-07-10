@@ -12,15 +12,11 @@ void print_usage(const char *exe_name) {
   std::cerr
       << "Usage: " << exe_name
       << " [input_ply] [output_dir] [--remove-outliers-percent=VALUE]"
-      << " [--outlier-neighbors=K] [--normal-estimation-neighbors=K]"
-      << " [--normal-neighborhood-mode=fixed-k|spacing-radius]"
-      << " [--normal-neighborhood-spacing-multiplier=VALUE]"
-      << " [--force-estimate-normals] [--keep-all-components]"
+      << " [--outlier-neighbors=K]"
       << " [--enable-smoothing] [--smoothing-neighbors=K]"
       << " [--enable-wlop] [--wlop-retain-percent=VALUE]"
       << " [--wlop-neighbor-radius=VALUE] [--wlop-iterations=N]"
-      << " [--wlop-require-uniform-sampling]"
-      << " [--sm_angle=VALUE] [--sm_radius=VALUE] [--sm_distance=VALUE]\n";
+      << " [--wlop-require-uniform-sampling]\n";
 }
 
 bool parse_args(const int argc, char *argv[], Pipeline_options &options) {
@@ -52,38 +48,6 @@ bool parse_args(const int argc, char *argv[], Pipeline_options &options) {
         std::cerr << "Error: --outlier-neighbors must be >= 2.\n";
         return false;
       }
-    } else if (arg.rfind("--normal-estimation-neighbors=", 0) == 0) {
-      options.normal_estimation_neighbors = std::stoi(arg.substr(30));
-      if (options.normal_estimation_neighbors < 2) {
-        std::cerr << "Error: --normal-estimation-neighbors must be >= 2.\n";
-        return false;
-      }
-    } else if (arg.rfind("--normal-neighborhood-mode=", 0) == 0) {
-      const std::string value =
-          arg.substr(std::string("--normal-neighborhood-mode=").size());
-      if (value == "fixed-k") {
-        options.normal_neighborhood_mode = Normal_neighborhood_mode::fixed_k;
-      } else if (value == "spacing-radius") {
-        options.normal_neighborhood_mode =
-            Normal_neighborhood_mode::spacing_radius;
-      } else {
-        std::cerr << "Error: --normal-neighborhood-mode must be fixed-k or "
-                     "spacing-radius.\n";
-        return false;
-      }
-    } else if (arg.rfind("--normal-neighborhood-spacing-multiplier=", 0) == 0) {
-      options.normal_neighborhood_spacing_multiplier = std::stod(arg.substr(
-          std::string("--normal-neighborhood-spacing-multiplier=").size()));
-      if (!std::isfinite(options.normal_neighborhood_spacing_multiplier) ||
-          options.normal_neighborhood_spacing_multiplier <= 0.0) {
-        std::cerr << "Error: --normal-neighborhood-spacing-multiplier must be "
-                     "finite and > 0.\n";
-        return false;
-      }
-    } else if (arg == "--force-estimate-normals") {
-      options.force_normal_estimation = true;
-    } else if (arg == "--keep-all-components") {
-      options.keep_largest_component = false;
     } else if (arg == "--enable-wlop") {
       options.enable_wlop = true;
     } else if (arg == "--enable-smoothing") {
@@ -125,27 +89,6 @@ bool parse_args(const int argc, char *argv[], Pipeline_options &options) {
     } else if (arg == "--wlop-require-uniform-sampling") {
       options.wlop_require_uniform_sampling = true;
       options.enable_wlop = true;
-    } else if (arg.rfind("--sm_angle=", 0) == 0) {
-      const std::string prefix = "--sm_angle=";
-      options.sm_angle = std::stod(arg.substr(prefix.size()));
-      if (!std::isfinite(options.sm_angle) || options.sm_angle <= 0.0) {
-        std::cerr << "Error: --sm_angle must be finite and > 0.\n";
-        return false;
-      }
-    } else if (arg.rfind("--sm_radius=", 0) == 0) {
-      const std::string prefix = "--sm_radius=";
-      options.sm_radius = std::stod(arg.substr(prefix.size()));
-      if (!std::isfinite(options.sm_radius) || options.sm_radius <= 0.0) {
-        std::cerr << "Error: --sm_radius must be finite and > 0.\n";
-        return false;
-      }
-    } else if (arg.rfind("--sm_distance=", 0) == 0) {
-      const std::string prefix = "--sm_distance=";
-      options.sm_distance = std::stod(arg.substr(prefix.size()));
-      if (!std::isfinite(options.sm_distance) || options.sm_distance <= 0.0) {
-        std::cerr << "Error: --sm_distance must be finite and > 0.\n";
-        return false;
-      }
     } else {
       std::cerr << "Error: unknown option: " << arg << "\n";
       print_usage(argv[0]);
@@ -176,11 +119,5 @@ Output_paths make_output_paths(const Pipeline_options &options) {
   paths.raw_points = out_dir / (stem + "_stage1_raw_points.ply");
   paths.preprocessed_points =
       out_dir / (stem + "_stage1_preprocessed_points.ply");
-  paths.raw_reconstructed_mesh =
-      out_dir / (stem + "_stage2_raw_reconstruction_mesh.ply");
-  paths.reconstructed_mesh = out_dir / (stem + "_reconstructed_mesh.ply");
-  paths.skeleton_polylines = out_dir / (stem + "_skeleton.polylines.txt");
-  paths.skeleton_edges = out_dir / (stem + "_skeleton_edges.txt");
-  paths.correspondence = out_dir / (stem + "_correspondence.polylines.txt");
   return paths;
 }

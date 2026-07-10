@@ -4,5 +4,8 @@ pipeline_output/
 input/
 AdaptiveSolvers/Bin/
 
+bags/
+bags_out/
+
 .vscode/
 .venv/

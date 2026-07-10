@@ -122,24 +122,28 @@ bool skeletonize(Triangle_mesh &mesh, Skeleton &skeleton) {
   return boost::num_vertices(skeleton) > 0 && boost::num_edges(skeleton) > 0;
 }
 
-bool write_skeleton_outputs(const Output_paths &paths, const Skeleton &skeleton,
+bool write_skeleton_outputs(const std::string &output_prefix, const Skeleton &skeleton,
                             const Triangle_mesh &mesh) {
   log_stage("3.1 Export skeleton artifacts");
 
-  if (!write_skeleton_polylines(paths.skeleton_polylines, skeleton)) {
+  std::filesystem::path skeleton_polylines = output_prefix + "_skeleton.polylines.txt";
+  std::filesystem::path skeleton_edges = output_prefix + "_skeleton_edges.txt";
+  std::filesystem::path correspondence = output_prefix + "_correspondence.polylines.txt";
+
+  if (!write_skeleton_polylines(skeleton_polylines, skeleton)) {
     return false;
   }
 
-  if (!write_skeleton_edges(paths.skeleton_edges, skeleton)) {
+  if (!write_skeleton_edges(skeleton_edges, skeleton)) {
     return false;
   }
 
-  if (!write_correspondence(paths.correspondence, skeleton, mesh)) {
+  if (!write_correspondence(correspondence, skeleton, mesh)) {
     return false;
   }
 
-  std::cout << "Saved: " << paths.skeleton_polylines.string() << "\n";
-  std::cout << "Saved: " << paths.skeleton_edges.string() << "\n";
-  std::cout << "Saved: " << paths.correspondence.string() << "\n";
+  std::cout << "Saved: " << skeleton_polylines.string() << "\n";
+  std::cout << "Saved: " << skeleton_edges.string() << "\n";
+  std::cout << "Saved: " << correspondence.string() << "\n";
   return true;
 }
