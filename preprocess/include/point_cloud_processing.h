@@ -9,10 +9,11 @@
 /** \brief Loads an oriented point cloud from PLY and validates normals
  * availability. */
 bool load_oriented_points(const std::string &input_path,
-                          std::vector<mesh_reconstruction::Pwn> &points);
+                          mesh_reconstruction::Point_set &points,
+                          const Pipeline_options &options);
 
 /** \brief Applies optional point-cloud filtering and computes average spacing.
  */
-bool preprocess_points(std::vector<mesh_reconstruction::Pwn> &points,
+bool preprocess_points(mesh_reconstruction::Point_set &points,
                        const Pipeline_options &options,
                        double &average_spacing);

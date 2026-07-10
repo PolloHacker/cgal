@@ -13,7 +13,7 @@ void log_stage(const std::string &label);
  */
 bool write_point_stage_visualization(
     const std::filesystem::path &out_path,
-    const std::vector<mesh_reconstruction::Pwn> &points,
+    const mesh_reconstruction::Point_set &points,
     const std::string &stage_label);
 
 /** \brief Exports a mesh snapshot for visualization and logs the stage. */

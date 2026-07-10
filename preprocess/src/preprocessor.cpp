@@ -6,7 +6,7 @@
 #include <iostream>
 #include <vector>
 
-using Pwn = mesh_reconstruction::Pwn;
+using Point_set = mesh_reconstruction::Point_set;
 
 /** \brief Point cloud preprocessing main function. */
 int main(int argc, char *argv[]) {
@@ -26,8 +26,8 @@ int main(int argc, char *argv[]) {
 
   const Output_paths output_paths = make_output_paths(options);
 
-  std::vector<Pwn> points;
-  if (!load_oriented_points(options.input_path, points)) {
+  Point_set points;
+  if (!load_oriented_points(options.input_path, points, options)) {
     return EXIT_FAILURE;
   }
 

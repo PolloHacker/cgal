@@ -6,6 +6,7 @@
 #include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
 #include <CGAL/Surface_mesh.h>
 #include <CGAL/property_map.h>
+#include <CGAL/Point_set_3.h>
 
 namespace mesh_reconstruction {
 /** \brief Kernel used by the reconstruction and skeletonization pipeline. */
@@ -29,19 +30,11 @@ using Point_map = CGAL::First_of_pair_property_map<Pwn>;
 /** \brief Property map extracting the normal from a point-normal pair. */
 using Normal_map = CGAL::Second_of_pair_property_map<Pwn>;
 
+/** \brief Unified point set type preserving all attributes (normals, colors, intensity). */
+using Point_set = CGAL::Point_set_3<Point>;
+
 /** \brief Triangle mesh type produced by Poisson reconstruction. */
 using Triangle_mesh = CGAL::Surface_mesh<Point>;
-
-/**
- * \brief Reconstructs a surface mesh from oriented points using CGAL Poisson
- * reconstruction. \param points Input oriented points. \param average_spacing
- * Characteristic spacing used to scale reconstruction parameters. \param mesh
- * Output mesh. \return `true` when reconstruction succeeds.
- */
-bool reconstruct_mesh_poisson(const std::vector<Pwn> &points,
-                              double average_spacing, Triangle_mesh &mesh,
-                              double sm_angle, double sm_radius,
-                              double sm_distance);
 
 /**
  * \brief Enforces skeletonization preconditions on a reconstructed mesh.

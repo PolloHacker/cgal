@@ -16,7 +16,9 @@ void print_usage(const char *exe_name) {
       << " [--enable-smoothing] [--smoothing-neighbors=K]"
       << " [--enable-wlop] [--wlop-retain-percent=VALUE]"
       << " [--wlop-neighbor-radius=VALUE] [--wlop-iterations=N]"
-      << " [--wlop-require-uniform-sampling]\n";
+      << " [--wlop-require-uniform-sampling]"
+      << " [--enable-spatial-subsampling]"
+      << " [--spatial-subsample-distance=VALUE] [--min-distance=VALUE]\n";
 }
 
 bool parse_args(const int argc, char *argv[], Pipeline_options &options) {
@@ -89,6 +91,24 @@ bool parse_args(const int argc, char *argv[], Pipeline_options &options) {
     } else if (arg == "--wlop-require-uniform-sampling") {
       options.wlop_require_uniform_sampling = true;
       options.enable_wlop = true;
+    } else if (arg == "--enable-spatial-subsampling") {
+      options.enable_spatial_subsampling = true;
+    } else if (arg.rfind("--spatial-subsample-distance=", 0) == 0) {
+      const std::string prefix = "--spatial-subsample-distance=";
+      options.spatial_subsample_distance = std::stod(arg.substr(prefix.size()));
+      options.enable_spatial_subsampling = true;
+      if (options.spatial_subsample_distance <= 0.0) {
+        std::cerr << "Error: --spatial-subsample-distance must be > 0.0.\n";
+        return false;
+      }
+    } else if (arg.rfind("--min-distance=", 0) == 0) {
+      const std::string prefix = "--min-distance=";
+      options.spatial_subsample_distance = std::stod(arg.substr(prefix.size()));
+      options.enable_spatial_subsampling = true;
+      if (options.spatial_subsample_distance <= 0.0) {
+        std::cerr << "Error: --min-distance must be > 0.0.\n";
+        return false;
+      }
     } else {
       std::cerr << "Error: unknown option: " << arg << "\n";
       print_usage(argv[0]);

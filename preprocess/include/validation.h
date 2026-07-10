@@ -7,18 +7,18 @@
 
 #include <vector>
 
-using Pwn = mesh_reconstruction::Pwn;
+using Point_set = mesh_reconstruction::Point_set;
 
 /** \brief Validates that a point set is usable for reconstruction stages. */
-bool validate_point_set(const std::vector<Pwn> &points,
+bool validate_point_set(const Point_set &points,
                         const char *context,
                         const bool require_oriented_normals);
 
 /** \brief Computes average spacing using k = neighbors (defaults to 6) */
-double compute_average_spacing(const std::vector<Pwn> &points, const int neighbors);
+double compute_average_spacing(const Point_set &points, const int neighbors);
 
 /** \brief Computes average spacing using k = min(neighbors, max_neighbors).  */
-double compute_average_spacing(const std::vector<Pwn> &points, const int neighbors, const unsigned int max);
+double compute_average_spacing(const Point_set &points, const int neighbors, const unsigned int max);
 
 /** \brief Validates spacing values used by Poisson reconstruction. */
 bool validate_average_spacing(const double average_spacing, const char *context);
