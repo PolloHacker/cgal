@@ -126,9 +126,9 @@ def run_pipeline(
         poisson_recon_bin,
         "--in", str(stage2_xyz_output),
         "--out", stage3_mesh_ply,
-        "--depth", "12",
+        "--depth", "10",
         "--bType", "2",
-        "--samplesPerNode", "1.5",
+        "--samplesPerNode", "4.0",
         "--pointWeight", "2.0",
         "--density"
     ]

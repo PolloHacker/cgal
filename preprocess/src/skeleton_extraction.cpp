@@ -6,6 +6,7 @@
 
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <sstream>
 
 using Triangle_mesh = mesh_reconstruction::Triangle_mesh;
@@ -21,27 +22,26 @@ namespace {
 struct Display_polylines {
   const Skeleton &skeleton;
   std::ofstream &out;
-  int polyline_size = 0;
-  std::stringstream sstr;
+  bool is_first = true;
 
   // The visitor is called by CGAL::split_graph_into_polylines for each maximal
-  // polyline in the skeleton. It accumulates the points of the current polyline
-  // and writes them to the output stream when the polyline ends.
+  // polyline in the skeleton. It streams each vertex coordinate on its own row,
+  // with a blank line separating individual polylines.
   Display_polylines(const Skeleton &skeleton_ref, std::ofstream &out_ref)
       : skeleton(skeleton_ref), out(out_ref) {}
 
   void start_new_polyline() {
-    polyline_size = 0;
-    sstr.str("");
-    sstr.clear();
+    if (!is_first) {
+      out << "\n";
+    }
+    is_first = false;
   }
 
   void add_node(const Skeleton_vertex v) {
-    ++polyline_size;
-    sstr << " " << skeleton[v].point;
+    out << skeleton[v].point << "\n";
   }
 
-  void end_polyline() { out << polyline_size << sstr.str() << "\n"; }
+  void end_polyline() {}
 };
 
 /** \brief Writes maximal skeleton polylines as one polyline per row. */
@@ -59,11 +59,7 @@ bool write_skeleton_polylines(const std::filesystem::path &out_path,
   return true;
 }
 
-/** \brief Writes the skeleton as a plain edge list (segment endpoints).
- *
- * The plain edge list is good for applications that only need the skeleton
- * connectivity and geometry, without the maximal polyline structure.
- */
+/** \brief Writes the skeleton as a Wavefront OBJ file (vertices and lines). */
 bool write_skeleton_edges(const std::filesystem::path &out_path,
                           const Skeleton &skeleton) {
   std::ofstream out(out_path.string());
@@ -73,16 +69,23 @@ bool write_skeleton_edges(const std::filesystem::path &out_path,
     return false;
   }
 
-  out << "# x1 y1 z1 x2 y2 z2\n";
+  out << "# Wavefront OBJ skeleton edges\n";
+  std::map<Skeleton_vertex, int> vertex_indices;
+  int index = 1;
+  for (const Skeleton_vertex v : CGAL::make_range(vertices(skeleton))) {
+    vertex_indices[v] = index++;
+    out << "v " << skeleton[v].point << "\n";
+  }
+
   for (const Skeleton_edge edge : CGAL::make_range(edges(skeleton))) {
     const Skeleton_vertex source_v = source(edge, skeleton);
     const Skeleton_vertex target_v = target(edge, skeleton);
-    out << skeleton[source_v].point << " " << skeleton[target_v].point << "\n";
+    out << "l " << vertex_indices[source_v] << " " << vertex_indices[target_v] << "\n";
   }
   return true;
 }
 
-/** \brief Writes vertex-to-skeleton correspondence as line segments. */
+/** \brief Writes vertex-to-skeleton correspondence as lines in a Wavefront OBJ file. */
 bool write_correspondence(const std::filesystem::path &out_path,
                           const Skeleton &skeleton,
                           const Triangle_mesh &mesh) {
@@ -93,14 +96,14 @@ bool write_correspondence(const std::filesystem::path &out_path,
     return false;
   }
 
-  // The skeletonization algorithm computes a set of vertices on the input mesh
-  // that correspond to each skeleton vertex. This function writes those
-  // correspondences as line segments from the skeleton vertex to each
-  // corresponding mesh.
+  out << "# Wavefront OBJ vertex-to-skeleton correspondence\n";
+  int vertex_index = 1;
   for (const Skeleton_vertex v : CGAL::make_range(vertices(skeleton))) {
     for (const mesh_vertex_descriptor vd : skeleton[v].vertices) {
-      out << "2 " << skeleton[v].point << " "
-          << get(CGAL::vertex_point, mesh, vd) << "\n";
+      out << "v " << skeleton[v].point << "\n";
+      out << "v " << get(CGAL::vertex_point, mesh, vd) << "\n";
+      out << "l " << vertex_index << " " << (vertex_index + 1) << "\n";
+      vertex_index += 2;
     }
   }
   return true;
@@ -126,9 +129,14 @@ bool write_skeleton_outputs(const std::string &output_prefix, const Skeleton &sk
                             const Triangle_mesh &mesh) {
   log_stage("3.1 Export skeleton artifacts");
 
-  std::filesystem::path skeleton_polylines = output_prefix + "_skeleton.polylines.txt";
-  std::filesystem::path skeleton_edges = output_prefix + "_skeleton_edges.txt";
-  std::filesystem::path correspondence = output_prefix + "_correspondence.polylines.txt";
+  std::filesystem::path skeleton_polylines = output_prefix + "_skeleton.poly";
+  std::filesystem::path skeleton_edges = output_prefix + "_skeleton_edges.obj";
+  std::filesystem::path correspondence = output_prefix + "_correspondence.obj";
+
+  // Clean up any old .txt output files that might remain from previous runs with this prefix.
+  std::filesystem::remove(output_prefix + "_skeleton.polylines.txt");
+  std::filesystem::remove(output_prefix + "_skeleton_edges.txt");
+  std::filesystem::remove(output_prefix + "_correspondence.polylines.txt");
 
   if (!write_skeleton_polylines(skeleton_polylines, skeleton)) {
     return false;
