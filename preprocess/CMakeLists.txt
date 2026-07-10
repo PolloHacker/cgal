@@ -115,6 +115,29 @@ endif()
 
 
 add_executable(
+  spatial_subsampler
+  src/spatial_subsampler.cpp
+)
+
+target_include_directories(spatial_subsampler PRIVATE include)
+
+target_link_libraries(spatial_subsampler PRIVATE 
+  CGAL::CGAL 
+  Eigen3::Eigen
+  TBB::tbb
+)
+
+target_compile_definitions(spatial_subsampler PRIVATE 
+  CGAL_EIGEN3_ENABLED 
+  CGAL_LINKED_WITH_TBB 
+)
+
+if(TARGET CGAL::Eigen3_support)
+  target_link_libraries(spatial_subsampler PRIVATE CGAL::Eigen3_support)
+endif()
+
+
+add_executable(
   skeletonization
   src/skeletonization.cpp
   src/skeleton_extraction.cpp
