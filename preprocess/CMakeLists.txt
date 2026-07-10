@@ -91,6 +91,8 @@ add_executable(
   src/preprocessor.cpp
   src/pipeline_config.cpp
   src/point_cloud_processing.cpp
+  src/ply_io.cpp
+  src/attribute_transfer.cpp
   src/io_visualization.cpp
   src/mesh_reconstruction.cpp
   src/validation.cpp
@@ -111,6 +113,40 @@ target_compile_definitions(preprocessor PRIVATE
 
 if(TARGET CGAL::Eigen3_support)
   target_link_libraries(preprocessor PRIVATE CGAL::Eigen3_support)
+endif()
+
+
+add_executable(
+  tests
+  test/test_main.cpp
+  test/test_ply_io.cpp
+  test/test_attribute_transfer.cpp
+  test/test_validation.cpp
+  test/test_point_cloud_processing.cpp
+  test/test_mesh_reconstruction.cpp
+  src/ply_io.cpp
+  src/attribute_transfer.cpp
+  src/validation.cpp
+  src/mesh_reconstruction.cpp
+  src/point_cloud_processing.cpp
+  src/io_visualization.cpp
+)
+
+target_include_directories(tests PRIVATE include)
+
+target_link_libraries(tests PRIVATE 
+  CGAL::CGAL 
+  Eigen3::Eigen
+  TBB::tbb
+)
+
+target_compile_definitions(tests PRIVATE 
+  CGAL_EIGEN3_ENABLED 
+  CGAL_LINKED_WITH_TBB 
+)
+
+if(TARGET CGAL::Eigen3_support)
+  target_link_libraries(tests PRIVATE CGAL::Eigen3_support)
 endif()
 
 
