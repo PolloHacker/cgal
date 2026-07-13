@@ -68,12 +68,10 @@ __forceinline__ __device__ scalar_t inner_prod(const scalar_t* vec1, const scala
 template<typename scalar_t>
 __forceinline__ __device__ scalar_t get_point2point_dist2(const scalar_t* point1, const scalar_t* point2) {
     // squared distance between 2 points, both dim == 3
-    // user is responsible for making sure dim == 3
-    scalar_t dist2 = 0.0;
-    for (signedindex_t d = 0; d < SPATIAL_DIM; d++) {
-        dist2 += pow(point1[d] - point2[d], scalar_t(2.0));
-    }
-    return dist2;
+    scalar_t dx = point1[0] - point2[0];
+    scalar_t dy = point1[1] - point2[1];
+    scalar_t dz = point1[2] - point2[2];
+    return dx * dx + dy * dy + dz * dz;
 }
 
 template<typename scalar_t>
@@ -333,21 +331,22 @@ __global__ void multiply_by_A_cuda_kernel(
         
         // should be ALLOWED_MAX_DEPTH*(NUM_OCT_CHILDREN - 1) + 1?
         // +2 just to be safe
-        constexpr signedindex_t search_stack_max_size = ALLOWED_MAX_DEPTH*(NUM_OCT_CHILDREN - 1) + 1;
-        signedindex_t search_stack[search_stack_max_size] = {};
-        signedindex_t search_stack_top = 0;
+        constexpr int search_stack_max_size = ALLOWED_MAX_DEPTH*(NUM_OCT_CHILDREN - 1) + 1;
+        int search_stack[search_stack_max_size] = {};
+        int search_stack_top = 0;
 
         // a push
         assert(search_stack_top < search_stack_max_size);
         search_stack[search_stack_top++] = 0;
         while (search_stack_top > 0) {
             // a pop
-            signedindex_t cur_node_index = search_stack[--search_stack_top];
+            int cur_node_index = search_stack[--search_stack_top];
             scalar_t point2node_dist2 = get_point2point_dist2(query_points + query_index*SPATIAL_DIM,
                                                               node_reppoints + cur_node_index*SPATIAL_DIM);
 
             /// @case 1: the query point is far from the sample, approximate the query value with the node center
-            if (point2node_dist2 > pow(scalar_t(TREECODE_THRESHOLD * 2.0f) * node_half_w_list[cur_node_index], scalar_t(2.0f))) {
+            scalar_t limit_val = scalar_t(TREECODE_THRESHOLD * 2.0f) * node_half_w_list[cur_node_index];
+            if (point2node_dist2 > limit_val * limit_val) {
                 scalar_t diff[SPATIAL_DIM];     // x - y
                 subtract_vec<scalar_t>(diff, query_points + query_index*SPATIAL_DIM, node_reppoints + cur_node_index*SPATIAL_DIM, SPATIAL_DIM);
                 out_val += eval_A_mu<scalar_t>(diff, node_attrs + cur_node_index * SPATIAL_DIM, query_width[query_index], continuous_kernel);
@@ -398,21 +397,22 @@ __global__ void multiply_by_AT_cuda_kernel(
     // if (query_index == 1) {
         scalar_t out_vec[SPATIAL_DIM] = {};
         
-        constexpr signedindex_t search_stack_max_size = ALLOWED_MAX_DEPTH*(NUM_OCT_CHILDREN - 1) + 1;
-        signedindex_t search_stack[search_stack_max_size] = {};
-        signedindex_t search_stack_top = 0;
+        constexpr int search_stack_max_size = ALLOWED_MAX_DEPTH*(NUM_OCT_CHILDREN - 1) + 1;
+        int search_stack[search_stack_max_size] = {};
+        int search_stack_top = 0;
 
         // a push
         assert(search_stack_top < search_stack_max_size);
         search_stack[search_stack_top++] = 0;
         while (search_stack_top > 0) {
             // a pop
-            signedindex_t cur_node_index = search_stack[--search_stack_top];
+            int cur_node_index = search_stack[--search_stack_top];
             scalar_t point2node_dist2 = get_point2point_dist2(query_points + query_index*SPATIAL_DIM,
                                                               node_reppoints + cur_node_index*SPATIAL_DIM);
 
             /// @case 1: the query point is far from the sample, approximate the query value with the node center
-            if (point2node_dist2 > pow(scalar_t(TREECODE_THRESHOLD * 2.0f) * node_half_w_list[cur_node_index], scalar_t(2.0f))) {
+            scalar_t limit_val = scalar_t(TREECODE_THRESHOLD * 2.0f) * node_half_w_list[cur_node_index];
+            if (point2node_dist2 > limit_val * limit_val) {
                 scalar_t diff[SPATIAL_DIM];     // x - y
                 subtract_vec<scalar_t>(diff, query_points + query_index*SPATIAL_DIM, node_reppoints + cur_node_index*SPATIAL_DIM, SPATIAL_DIM);
                 eval_AT_s_add_<scalar_t>(out_vec, diff, node_attrs + cur_node_index, query_width[query_index]);
@@ -469,21 +469,22 @@ __global__ void multiply_by_G_cuda_kernel(
     if (query_index < num_queries) {
         scalar_t out_vec[SPATIAL_DIM] = {};
         
-        constexpr signedindex_t search_stack_max_size = ALLOWED_MAX_DEPTH*(NUM_OCT_CHILDREN - 1) + 1;
-        signedindex_t search_stack[search_stack_max_size] = {};
-        signedindex_t search_stack_top = 0;
+        constexpr int search_stack_max_size = ALLOWED_MAX_DEPTH*(NUM_OCT_CHILDREN - 1) + 1;
+        int search_stack[search_stack_max_size] = {};
+        int search_stack_top = 0;
 
         // a push
         assert(search_stack_top < search_stack_max_size);
         search_stack[search_stack_top++] = 0;
         while (search_stack_top > 0) {
             // a pop
-            signedindex_t cur_node_index = search_stack[--search_stack_top];
+            int cur_node_index = search_stack[--search_stack_top];
             scalar_t point2node_dist2 = get_point2point_dist2(query_points + query_index*SPATIAL_DIM,
                                                               node_reppoints + cur_node_index*SPATIAL_DIM);
 
             /// @case 1: the query point is far from the sample, approximate the query value with the node center
-            if (point2node_dist2 > pow(scalar_t(TREECODE_THRESHOLD * 2.0f) * node_half_w_list[cur_node_index], scalar_t(2.0f))) {
+            scalar_t limit_val = scalar_t(TREECODE_THRESHOLD * 2.0f) * node_half_w_list[cur_node_index];
+            if (point2node_dist2 > limit_val * limit_val) {
                 scalar_t diff[SPATIAL_DIM];     // x - y
                 subtract_vec<scalar_t>(diff, query_points + query_index*SPATIAL_DIM, node_reppoints + cur_node_index*SPATIAL_DIM, SPATIAL_DIM);
                 eval_G_mu_add_<scalar_t>(out_vec, diff, node_attrs + cur_node_index*SPATIAL_DIM, query_width[query_index]);

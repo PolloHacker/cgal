@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(cgal_reconstruction_pipeline LANGUAGES CXX)
+project(cgal_reconstruction_pipeline LANGUAGES CXX CUDA)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -15,13 +15,30 @@ find_package(OpenMP REQUIRED)
 find_package(CGAL CONFIG REQUIRED)
 find_package(Eigen3 CONFIG REQUIRED)
 find_package(TBB REQUIRED)
+find_package(CUDAToolkit REQUIRED)
 
-# WNNC Core library
+# Let CMake auto-detect and target the host GPU compute architecture
+set(CMAKE_CUDA_ARCHITECTURES native)
+
+# WNNC Core library (with CUDA treecode kernels and CPU utils)
 add_library(wnnc_core 
   src/wnnc/cpp/src/wnnc/point_cloud_io.cpp
+  src/wnnc/python/ext/wn_treecode/wn_treecode_cpu/wn_treecode_cpu_treeutils.cpp
+  src/wnnc/python/ext/wn_treecode/wn_treecode_cuda/wn_treecode_cuda_kernels.cu
+  src/pipeline/winding_number_operator_cuda.cu
 )
-target_include_directories(wnnc_core PUBLIC src/wnnc/cpp/src)
-target_link_libraries(wnnc_core PUBLIC Threads::Threads)
+
+target_include_directories(wnnc_core PUBLIC 
+  src/wnnc/cpp/src
+  src/wnnc/python/ext/wn_treecode/wn_treecode_cpu
+  src/wnnc/python/ext/wn_treecode/wn_treecode_cuda
+)
+
+target_link_libraries(wnnc_core PUBLIC 
+  Threads::Threads
+  CUDA::cudart
+)
+
 if(NOT MSVC)
   target_compile_options(wnnc_core PUBLIC -fno-math-errno)
 endif()
@@ -84,9 +101,11 @@ target_include_directories(pipeline_tests PRIVATE
   src/preprocess/include
   src/pipeline
   src/AdaptiveSolvers/Src
+  src/wnnc/cpp/src
 )
 
 target_link_libraries(pipeline_tests PRIVATE
+  wnnc_core
   CGAL::CGAL
   Eigen3::Eigen
   TBB::tbb

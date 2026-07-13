@@ -82,9 +82,8 @@ std::vector<wnnc::Vec3<double>> estimateNormalsPipeline(
     const std::vector<wnnc::Vec3<double>>& rawPoints, const Options& options) {
     wnnc::WindingNumberOperator<Scalar> windingNumber(normalizeToUnitCube<Scalar>(rawPoints));
 
-    const wnnc::Octree<Scalar>& tree = windingNumber.tree();
-    std::cout << "[LOG] octree: " << tree.nodeCount() << " nodes, " << tree.leafCount()
-              << " leaves, depth " << tree.depth() << "\n";
+    std::cout << "[LOG] octree: " << windingNumber.nodeCount() << " nodes, " << windingNumber.leafCount()
+              << " leaves, depth " << windingNumber.depth() << "\n";
 
     const auto onIteration = [&options](int done, int total) {
         if (!options.showProgress) {
