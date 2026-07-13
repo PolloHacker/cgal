@@ -46,11 +46,13 @@ def run_pipeline(
         preprocessor_bin,
         str(input_path),
         str(stage1_dir),
+        "--enable-spatial-subsampling",
+        "--spatial-subsample-distance=0.5",
         # "--enable-smoothing",
         # "--outlier-neighbors=20",
         # "--enable-wlop",
         # "--wlop-require-uniform-sampling",
-        # "--wlop-retain-percent=95"
+        # "--wlop-retain-percent=65"
     ]
     
     print(f"Executing: {' '.join(cmd_stage1)}")
@@ -93,7 +95,7 @@ def run_pipeline(
         main_wnnc_py,
         str(preprocessed_ply), # Input
         "--out_dir", str(wnnc_output_dir),
-        "--width_config", "l0",  # Example width config, adjust as needed
+        "--width_config", "l0",
         "--tqdm"
     ]
     
@@ -128,7 +130,7 @@ def run_pipeline(
         "--out", stage3_mesh_ply,
         "--depth", "10",
         "--bType", "2",
-        "--samplesPerNode", "4.0",
+        "--samplesPerNode", "1.5",
         "--pointWeight", "2.0",
         "--density"
     ]
@@ -197,13 +199,13 @@ def run_pipeline(
 
 
 if __name__ == "__main__":
-    INPUT_FILE = "input/diaclase.ply"
+    INPUT_FILE = "input/Lp_Boi.ply"
     OUTPUT_DIR = "pipeline_output"
-    PREPROCESSOR_EXE = "./build/preprocessor" 
-    WNNC_SCRIPT = "wnnc/main_wnnc.py"
-    KAZHDAN_POISSON_EXE = "AdaptiveSolvers/Bin/Linux/PoissonRecon"
-    KAZHDAN_SURFACE_TRIMMER_EXE = "AdaptiveSolvers/Bin/Linux/SurfaceTrimmer"
-    SKELETON_EXE = "./build/skeletonization"
+    PREPROCESSOR_EXE = "./build/src/preprocess/preprocessor" 
+    WNNC_SCRIPT = "src/wnnc/python/main_wnnc.py"
+    KAZHDAN_POISSON_EXE = "src/AdaptiveSolvers/Bin/Linux/PoissonRecon"
+    KAZHDAN_SURFACE_TRIMMER_EXE = "src/AdaptiveSolvers/Bin/Linux/SurfaceTrimmer"
+    SKELETON_EXE = "./build/src/preprocess/skeletonization"
     
     success = run_pipeline(
         INPUT_FILE, 
