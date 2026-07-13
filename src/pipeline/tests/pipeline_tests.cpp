@@ -3,6 +3,7 @@
 #include "../poisson_recon_wrapper.h"
 #include <cmath>
 #include <vector>
+#include <iostream>
 
 // Helper to generate a sphere point cloud
 std::vector<PipelinePoint> generate_sphere(double radius, int u_segments, int v_segments) {
@@ -69,6 +70,32 @@ TEST_CASE("Poisson Reconstruction and Trimming Unit Tests") {
             CHECK(std::isfinite(vertex.y));
             CHECK(std::isfinite(vertex.z));
             CHECK(vertex.value >= 0.0);
+        }
+    }
+
+    SUBCASE("Solver Combinations: Degree and Boundary Types") {
+        // Test all degree (1, 2) and boundary type (1=Free, 2=Dirichlet, 3=Neumann) configurations
+        for (int degree : {1, 2}) {
+            for (int bType : {1, 2, 3}) {
+                PoissonParams params;
+                params.depth = 5; // even smaller depth for fast testing
+                params.degree = degree;
+                params.bType = bType;
+                params.verbose = false;
+
+                PipelineMesh mesh;
+                CHECK_NOTHROW(mesh = run_poisson_reconstruction(sphere_points, params));
+                
+                // Verify the mesh contains reconstructed vertices and faces
+                CHECK(mesh.vertices.size() > 0);
+                CHECK(mesh.faces.size() > 0);
+
+                // Verify the values are valid
+                for (const auto& v : mesh.vertices) {
+                    CHECK(std::isfinite(v.x));
+                    CHECK(std::isfinite(v.value));
+                }
+            }
         }
     }
 }

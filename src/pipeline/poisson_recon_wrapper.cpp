@@ -451,8 +451,8 @@ PipelineMesh run_poisson_reconstruction(
     BoundaryType b_type;
     switch(poisson_params.bType) {
         case 1: b_type = BOUNDARY_FREE; break;
-        case 2: b_type = BOUNDARY_NEUMANN; break;
-        case 3: b_type = BOUNDARY_DIRICHLET; break;
+        case 2: b_type = BOUNDARY_DIRICHLET; break;
+        case 3: b_type = BOUNDARY_NEUMANN; break;
         default: throw std::runtime_error("Invalid boundary type");
     }
 

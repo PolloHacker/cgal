@@ -7,6 +7,9 @@
 #include <chrono>
 #include <map>
 #include <fstream>
+#include <future>
+#include <thread>
+#include <system_error>
 
 #include <CLI11.hpp>
 
@@ -97,6 +100,19 @@ bool save_mesh_ply(const fs::path& filepath, const PipelineMesh& mesh) {
     return true;
 }
 
+template <typename Func>
+void spawn_bg_task(std::vector<std::future<void>>& bg_tasks, Func&& func) {
+    bg_tasks.push_back(std::async(std::launch::async, [f = std::forward<Func>(func)]() {
+        try {
+            f();
+        } catch (const std::exception& e) {
+            std::cerr << "\n[Background I/O Error] " << e.what() << "\n" << std::flush;
+        } catch (...) {
+            std::cerr << "\n[Background I/O Error] Unknown exception occurred.\n" << std::flush;
+        }
+    }));
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -160,7 +176,7 @@ int main(int argc, char* argv[]) {
     poisson_group->add_option("--samplesPerNode", poisson_opts.samplesPerNode, "Minimum number of samples per node")->capture_default_str();
     poisson_group->add_option("--pointWeight", poisson_opts.pointWeight, "Screened Poisson interpolation weight")->capture_default_str();
     poisson_group->add_option("--scale", poisson_opts.scale, "Scale factor")->capture_default_str();
-    poisson_group->add_option("--bType", poisson_opts.bType, "Boundary type (1=free, 2=neumann, 3=dirichlet)")->capture_default_str();
+    poisson_group->add_option("--bType", poisson_opts.bType, "Boundary type (1=free, 2=dirichlet, 3=neumann)")->capture_default_str();
     poisson_group->add_option("--degree", poisson_opts.degree, "B-spline degree")->capture_default_str();
 
     // Trimming CLI options
@@ -217,6 +233,17 @@ int main(int argc, char* argv[]) {
 
     std::cout << "Starting Unified C++ Reconstruction Pipeline for: " << input_path << "\n";
 
+    // Vector to track background asynchronous tasks
+    std::vector<std::future<void>> bg_tasks;
+
+    auto wait_bg_tasks = [&bg_tasks]() {
+        for (auto& task : bg_tasks) {
+            if (task.valid()) {
+                task.wait();
+            }
+        }
+    };
+
     // -------------------------------------------------------------------------
     // STAGE 1: Preprocessing using CGAL
     // -------------------------------------------------------------------------
@@ -225,12 +252,14 @@ int main(int argc, char* argv[]) {
     mesh_reconstruction::Point_set points;
     if (!load_oriented_points(input_path, points, prep_opts)) {
         std::cerr << "Error during Stage 1 point cloud loading.\n";
+        wait_bg_tasks();
         return EXIT_FAILURE;
     }
 
     double average_spacing = 0.0;
     if (!preprocess_points(points, prep_opts, average_spacing)) {
         std::cerr << "Error during Stage 1 point cloud preprocessing.\n";
+        wait_bg_tasks();
         return EXIT_FAILURE;
     }
 
@@ -238,10 +267,12 @@ int main(int argc, char* argv[]) {
         fs::path s1_out_dir = stage1_dir / stem;
         fs::create_directories(s1_out_dir);
         fs::path s1_out_file = s1_out_dir / (stem + "_stage1_preprocessed_points.ply");
-        std::cout << "Saving Stage 1 output to: " << s1_out_file << "\n";
-        if (!write_point_stage_visualization(s1_out_file, points, "Preprocessed Point Cloud")) {
-            std::cerr << "Warning: Failed to save Stage 1 preprocessed points.\n";
-        }
+        spawn_bg_task(bg_tasks, [s1_out_file, points_copy = points]() {
+            std::cout << "Saving Stage 1 output to: " << s1_out_file << "\n";
+            if (!write_point_stage_visualization(s1_out_file, points_copy, "Preprocessed Point Cloud")) {
+                std::cerr << "Warning: Failed to save Stage 1 preprocessed points.\n";
+            }
+        });
     }
 
     // -------------------------------------------------------------------------
@@ -273,14 +304,6 @@ int main(int argc, char* argv[]) {
     double wnnc_duration = std::chrono::duration<double>(std::chrono::steady_clock::now() - wnnc_start).count();
     std::cout << "WNNC finished. Duration: " << wnnc_duration << " seconds.\n";
 
-    if (save_stage2) {
-        fs::path s2_out_dir = stage2_dir / stem;
-        fs::create_directories(s2_out_dir);
-        fs::path s2_out_file = s2_out_dir / (stem + ".xyz");
-        std::cout << "Saving WNNC outputs to: " << s2_out_file << "\n";
-        wnnc::io::saveXyzWithNormals(s2_out_file, rawPoints, normals);
-    }
-
     // -------------------------------------------------------------------------
     // STAGE 3: Screened Poisson Reconstruction (In-Memory)
     // -------------------------------------------------------------------------
@@ -288,6 +311,17 @@ int main(int argc, char* argv[]) {
     std::vector<PipelinePoint> pipeline_pts(rawPoints.size());
     for (size_t i = 0; i < rawPoints.size(); ++i) {
         pipeline_pts[i] = {rawPoints[i].x, rawPoints[i].y, rawPoints[i].z, normals[i].x, normals[i].y, normals[i].z};
+    }
+
+    // Now that pipeline_pts are constructed, we can move rawPoints and normals to the background thread
+    if (save_stage2) {
+        fs::path s2_out_dir = stage2_dir / stem;
+        fs::create_directories(s2_out_dir);
+        fs::path s2_out_file = s2_out_dir / (stem + ".xyz");
+        spawn_bg_task(bg_tasks, [s2_out_file, pts = std::move(rawPoints), nls = std::move(normals)]() {
+            std::cout << "Saving WNNC outputs to: " << s2_out_file << "\n";
+            wnnc::io::saveXyzWithNormals(s2_out_file, pts, nls);
+        });
     }
 
     auto poisson_start = std::chrono::steady_clock::now();
@@ -298,10 +332,12 @@ int main(int argc, char* argv[]) {
 
     fs::path s3_out_file = stage3_dir / (stem + "_watertight.ply");
     if (save_stage3) {
-        std::cout << "Saving untrimmed watertight mesh to: " << s3_out_file << "\n";
-        if (!save_mesh_ply(s3_out_file, untrimmed_mesh)) {
-            std::cerr << "Warning: Failed to save untrimmed watertight mesh.\n";
-        }
+        spawn_bg_task(bg_tasks, [s3_out_file, mesh = untrimmed_mesh]() {
+            std::cout << "Saving untrimmed watertight mesh to: " << s3_out_file << "\n";
+            if (!save_mesh_ply(s3_out_file, mesh)) {
+                std::cerr << "Warning: Failed to save untrimmed watertight mesh.\n";
+            }
+        });
     }
 
     // -------------------------------------------------------------------------
@@ -317,18 +353,22 @@ int main(int argc, char* argv[]) {
         std::cout << "Trimmed mesh has " << final_mesh.vertices.size() << " vertices, " << final_mesh.faces.size() << " faces.\n";
 
         fs::path s4_out_file = stage4_dir / (stem + "_watertight_trimmed.ply");
-        std::cout << "Saving trimmed mesh to: " << s4_out_file << "\n";
-        if (!save_mesh_ply(s4_out_file, final_mesh)) {
-            std::cerr << "Warning: Failed to save trimmed mesh.\n";
-        }
+        spawn_bg_task(bg_tasks, [s4_out_file, mesh = final_mesh]() {
+            std::cout << "Saving trimmed mesh to: " << s4_out_file << "\n";
+            if (!save_mesh_ply(s4_out_file, mesh)) {
+                std::cerr << "Warning: Failed to save trimmed mesh.\n";
+            }
+        });
     } else {
         std::cout << "\n--- [Stage 4] Skipping Surface Trimming (Trimming Disabled) ---\n";
         // Write the untrimmed mesh to the trimmed directory to ensure a final mesh always exists at the expected location
         fs::path s4_out_file = stage4_dir / (stem + "_watertight_trimmed.ply");
-        std::cout << "Saving final watertight (untrimmed) mesh to: " << s4_out_file << "\n";
-        if (!save_mesh_ply(s4_out_file, final_mesh)) {
-            std::cerr << "Warning: Failed to save final mesh.\n";
-        }
+        spawn_bg_task(bg_tasks, [s4_out_file, mesh = final_mesh]() {
+            std::cout << "Saving final watertight (untrimmed) mesh to: " << s4_out_file << "\n";
+            if (!save_mesh_ply(s4_out_file, mesh)) {
+                std::cerr << "Warning: Failed to save final mesh.\n";
+            }
+        });
     }
 
     // -------------------------------------------------------------------------
@@ -353,6 +393,7 @@ int main(int argc, char* argv[]) {
     std::cout << "Normalizing mesh for skeletonization...\n";
     if (!mesh_reconstruction::normalize_mesh_for_skeletonization(cgal_mesh, true)) {
         std::cerr << "Error: mesh normalization failed. Cannot proceed with skeletonization.\n";
+        wait_bg_tasks();
         return EXIT_FAILURE;
     }
 
@@ -368,6 +409,7 @@ int main(int argc, char* argv[]) {
         std::cout << "Re-normalizing decimated mesh...\n";
         if (!mesh_reconstruction::normalize_mesh_for_skeletonization(cgal_mesh, true)) {
             std::cerr << "Error: post-decimation mesh normalization failed. Cannot proceed with skeletonization.\n";
+            wait_bg_tasks();
             return EXIT_FAILURE;
         }
     }
@@ -376,6 +418,7 @@ int main(int argc, char* argv[]) {
     auto skeleton_start = std::chrono::steady_clock::now();
     if (!skeletonize(cgal_mesh, skeleton)) {
         std::cerr << "Error: skeleton extraction failed or produced empty skeleton.\n";
+        wait_bg_tasks();
         return EXIT_FAILURE;
     }
     double skeleton_duration = std::chrono::duration<double>(std::chrono::steady_clock::now() - skeleton_start).count();
@@ -385,16 +428,20 @@ int main(int argc, char* argv[]) {
     fs::create_directories(s5_out_dir);
     fs::path s5_out_prefix = s5_out_dir / stem;
 
-    std::cout << "Saving skeleton outputs to: " << s5_out_prefix << "\n";
-    if (!write_skeleton_outputs(s5_out_prefix.string(), skeleton, cgal_mesh)) {
-        std::cerr << "Error: failed to write skeleton outputs.\n";
-        return EXIT_FAILURE;
-    }
+    spawn_bg_task(bg_tasks, [s5_out_prefix, skel = std::move(skeleton), mesh = std::move(cgal_mesh)]() {
+        std::cout << "Saving skeleton outputs to: " << s5_out_prefix << "\n";
+        if (!write_skeleton_outputs(s5_out_prefix.string(), skel, mesh)) {
+            std::cerr << "Error: failed to write skeleton outputs.\n";
+        }
+    });
 
     auto total_duration = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
-    std::cout << "\nPipeline successfully completed! Total time: " << total_duration << " seconds.\n";
-    std::cout << "Output watertight mesh saved at: " << stage4_dir / (stem + "_watertight_trimmed.ply") << "\n";
-    std::cout << "Skeleton files saved with prefix: " << s5_out_prefix << "\n";
+    std::cout << "\nPipeline stages completed! Total execution time: " << total_duration << " seconds.\n";
+
+    // Wait for all background file write tasks to complete before exiting main
+    std::cout << "Waiting for background file writing tasks to complete...\n";
+    wait_bg_tasks();
+    std::cout << "All background tasks completed. Exiting.\n";
 
     return EXIT_SUCCESS;
 }
