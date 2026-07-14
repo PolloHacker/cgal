@@ -101,10 +101,11 @@ bool normalize_mesh_for_skeletonization(Triangle_mesh &mesh,
 }
 
 bool write_mesh_ply(const std::filesystem::path &output_mesh_path,
-                    const Triangle_mesh &mesh) {
+                    const Triangle_mesh &mesh,
+                    bool binary) {
   if (!CGAL::IO::write_polygon_mesh(
           output_mesh_path.string(), mesh,
-          CGAL::parameters::stream_precision(17).use_binary_mode(false))) {
+          CGAL::parameters::stream_precision(17).use_binary_mode(binary))) {
     std::cerr << "Error: cannot write reconstructed mesh to "
               << output_mesh_path.string() << "\n";
     return false;

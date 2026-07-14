@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(cgal_reconstruction_pipeline LANGUAGES CXX CUDA)
+project(cgal_reconstruction_pipeline LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -15,29 +15,63 @@ find_package(OpenMP REQUIRED)
 find_package(CGAL CONFIG REQUIRED)
 find_package(Eigen3 CONFIG REQUIRED)
 find_package(TBB REQUIRED)
-find_package(CUDAToolkit REQUIRED)
 
-# Let CMake auto-detect and target the host GPU compute architecture
-set(CMAKE_CUDA_ARCHITECTURES native)
+option(WNNC_USE_CUDA "Use CUDA acceleration for WNNC solver" ON)
 
-# WNNC Core library (with CUDA treecode kernels and CPU utils)
-add_library(wnnc_core 
+if(WNNC_USE_CUDA)
+  include(CheckLanguage)
+  check_language(CUDA)
+  if(CMAKE_CUDA_COMPILER)
+    enable_language(CUDA)
+    find_package(CUDAToolkit REQUIRED)
+    # Let CMake auto-detect and target the host GPU compute architecture
+    set(CMAKE_CUDA_ARCHITECTURES native)
+    message(STATUS "CUDA compilation enabled.")
+  else()
+    message(STATUS "CUDA compiler not found. Falling back to CPU-only build.")
+    set(WNNC_USE_CUDA OFF)
+  endif()
+endif()
+
+# Common sources for WNNC
+set(WNNC_CORE_SOURCES
   src/wnnc/cpp/src/wnnc/point_cloud_io.cpp
   src/wnnc/python/ext/wn_treecode/wn_treecode_cpu/wn_treecode_cpu_treeutils.cpp
-  src/wnnc/python/ext/wn_treecode/wn_treecode_cuda/wn_treecode_cuda_kernels.cu
-  src/pipeline/winding_number_operator_cuda.cu
 )
 
-target_include_directories(wnnc_core PUBLIC 
+set(WNNC_CORE_INCLUDES
   src/wnnc/cpp/src
   src/wnnc/python/ext/wn_treecode/wn_treecode_cpu
-  src/wnnc/python/ext/wn_treecode/wn_treecode_cuda
 )
+
+if(WNNC_USE_CUDA)
+  list(APPEND WNNC_CORE_SOURCES
+    src/wnnc/python/ext/wn_treecode/wn_treecode_cuda/wn_treecode_cuda_kernels.cu
+    src/pipeline/winding_number_operator_cuda.cu
+  )
+  list(APPEND WNNC_CORE_INCLUDES
+    src/wnnc/python/ext/wn_treecode/wn_treecode_cuda
+  )
+else()
+  list(APPEND WNNC_CORE_SOURCES
+    src/wnnc/python/ext/wn_treecode/wn_treecode_cpu/wn_treecode_cpu_kernels.cpp
+    src/pipeline/winding_number_operator_cpu.cpp
+  )
+endif()
+
+add_library(wnnc_core ${WNNC_CORE_SOURCES})
+
+target_include_directories(wnnc_core PUBLIC ${WNNC_CORE_INCLUDES})
 
 target_link_libraries(wnnc_core PUBLIC 
   Threads::Threads
-  CUDA::cudart
+  OpenMP::OpenMP_CXX
 )
+
+if(WNNC_USE_CUDA)
+  target_link_libraries(wnnc_core PUBLIC CUDA::cudart)
+  target_compile_definitions(wnnc_core PUBLIC WNNC_USE_CUDA)
+endif()
 
 if(NOT MSVC)
   target_compile_options(wnnc_core PUBLIC -fno-math-errno)
@@ -55,14 +89,6 @@ add_subdirectory(src/preprocess)
 add_executable(pipeline
   src/pipeline/pipeline_main.cpp
   src/pipeline/poisson_recon_wrapper.cpp
-  src/preprocess/src/pipeline_config.cpp
-  src/preprocess/src/point_cloud_processing.cpp
-  src/preprocess/src/ply_io.cpp
-  src/preprocess/src/attribute_transfer.cpp
-  src/preprocess/src/io_visualization.cpp
-  src/preprocess/src/mesh_reconstruction.cpp
-  src/preprocess/src/validation.cpp
-  src/preprocess/src/skeleton_extraction.cpp
 )
 
 target_include_directories(pipeline PRIVATE 
@@ -74,15 +100,11 @@ target_include_directories(pipeline PRIVATE
 
 target_link_libraries(pipeline PRIVATE 
   wnnc_core
-  CGAL::CGAL 
-  Eigen3::Eigen
+  preprocess_core
   TBB::tbb
-  OpenMP::OpenMP_CXX
 )
 
 target_compile_definitions(pipeline PRIVATE 
-  CGAL_EIGEN3_ENABLED 
-  CGAL_LINKED_WITH_TBB 
   USE_DOUBLE
 )
 

@@ -262,14 +262,14 @@ struct WindingNumberOperator<Scalar>::Impl {
         cudaMemcpy(out_attrs_h.data(), temp_out_attrs_d, point_count * sizeof(float), cudaMemcpyDeviceToHost);
 
         std::vector<Scalar> result(point_count);
-        for (size_t i = 0; i < (size_t)point_count; ++i) {
+        for (std::int64_t i = 0; i < (std::int64_t)point_count; ++i) {
             result[i] = static_cast<Scalar>(out_attrs_h[i]);
         }
         return result;
     }
 
     std::vector<Vec3<Scalar>> applyATransposed(std::span<const Scalar> values, std::span<const Scalar> smoothingWidths) const {
-        for (size_t i = 0; i < (size_t)point_count; ++i) {
+        for (std::int64_t i = 0; i < (std::int64_t)point_count; ++i) {
             float val = static_cast<float>(values[i]);
             host_flat_mu[i] = val;
             host_weights[i] = std::abs(val);
@@ -361,7 +361,7 @@ struct WindingNumberOperator<Scalar>::Impl {
         cudaMemcpy(out_attrs_h.data(), temp_out_attrs_d, point_count * 3 * sizeof(float), cudaMemcpyDeviceToHost);
 
         std::vector<Vec3<Scalar>> result(point_count);
-        for (size_t i = 0; i < (size_t)point_count; ++i) {
+        for (std::int64_t i = 0; i < (std::int64_t)point_count; ++i) {
             result[i] = {
                 static_cast<Scalar>(out_attrs_h[3 * i + 0]),
                 static_cast<Scalar>(out_attrs_h[3 * i + 1]),
@@ -372,7 +372,7 @@ struct WindingNumberOperator<Scalar>::Impl {
     }
 
     std::vector<Vec3<Scalar>> applyG(std::span<const Vec3<Scalar>> mu, std::span<const Scalar> smoothingWidths) const {
-        for (size_t i = 0; i < (size_t)point_count; ++i) {
+        for (std::int64_t i = 0; i < (std::int64_t)point_count; ++i) {
             float mx = static_cast<float>(mu[i].x);
             float my = static_cast<float>(mu[i].y);
             float mz = static_cast<float>(mu[i].z);
@@ -468,7 +468,7 @@ struct WindingNumberOperator<Scalar>::Impl {
         cudaMemcpy(out_attrs_h.data(), temp_out_attrs_d, point_count * 3 * sizeof(float), cudaMemcpyDeviceToHost);
 
         std::vector<Vec3<Scalar>> result(point_count);
-        for (size_t i = 0; i < (size_t)point_count; ++i) {
+        for (std::int64_t i = 0; i < (std::int64_t)point_count; ++i) {
             result[i] = {
                 static_cast<Scalar>(out_attrs_h[3 * i + 0]),
                 static_cast<Scalar>(out_attrs_h[3 * i + 1]),

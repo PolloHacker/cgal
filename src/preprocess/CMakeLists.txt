@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 project(cgal_point_cloud_skeletonization LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -86,9 +86,8 @@ endif()
 
 find_package(TBB REQUIRED)
 
-add_executable(
-  preprocessor
-  src/preprocessor.cpp
+# Shared preprocess library
+add_library(preprocess_core STATIC
   src/pipeline_config.cpp
   src/point_cloud_processing.cpp
   src/ply_io.cpp
@@ -96,83 +95,45 @@ add_executable(
   src/io_visualization.cpp
   src/mesh_reconstruction.cpp
   src/validation.cpp
+  src/skeleton_extraction.cpp
 )
 
-target_include_directories(preprocessor PRIVATE include)
+target_include_directories(preprocess_core PUBLIC include)
 
-target_link_libraries(preprocessor PRIVATE 
+target_link_libraries(preprocess_core PUBLIC
   CGAL::CGAL 
   Eigen3::Eigen
   TBB::tbb
 )
 
-target_compile_definitions(preprocessor PRIVATE 
+target_compile_definitions(preprocess_core PUBLIC
   CGAL_EIGEN3_ENABLED 
   CGAL_LINKED_WITH_TBB 
 )
 
 if(TARGET CGAL::Eigen3_support)
-  target_link_libraries(preprocessor PRIVATE CGAL::Eigen3_support)
+  target_link_libraries(preprocess_core PUBLIC CGAL::Eigen3_support)
 endif()
 
+# Preprocessor executable
+add_executable(preprocessor
+  src/preprocessor.cpp
+)
+target_link_libraries(preprocessor PRIVATE preprocess_core)
 
-add_executable(
-  tests
+# Tests executable
+add_executable(tests
   test/test_main.cpp
   test/test_ply_io.cpp
   test/test_attribute_transfer.cpp
   test/test_validation.cpp
   test/test_point_cloud_processing.cpp
   test/test_mesh_reconstruction.cpp
-  src/ply_io.cpp
-  src/attribute_transfer.cpp
-  src/validation.cpp
-  src/mesh_reconstruction.cpp
-  src/point_cloud_processing.cpp
-  src/io_visualization.cpp
 )
+target_link_libraries(tests PRIVATE preprocess_core)
 
-target_include_directories(tests PRIVATE include)
-
-target_link_libraries(tests PRIVATE 
-  CGAL::CGAL 
-  Eigen3::Eigen
-  TBB::tbb
-)
-
-target_compile_definitions(tests PRIVATE 
-  CGAL_EIGEN3_ENABLED 
-  CGAL_LINKED_WITH_TBB 
-)
-
-if(TARGET CGAL::Eigen3_support)
-  target_link_libraries(tests PRIVATE CGAL::Eigen3_support)
-endif()
-
-
-
-add_executable(
-  skeletonization
+# Skeletonization executable
+add_executable(skeletonization
   src/skeletonization.cpp
-  src/skeleton_extraction.cpp
-  src/mesh_reconstruction.cpp
-  src/io_visualization.cpp
-  src/validation.cpp
 )
-
-target_include_directories(skeletonization PRIVATE include)
-
-target_link_libraries(skeletonization PRIVATE 
-  CGAL::CGAL 
-  Eigen3::Eigen
-  TBB::tbb
-)
-
-target_compile_definitions(skeletonization PRIVATE 
-  CGAL_EIGEN3_ENABLED 
-  CGAL_LINKED_WITH_TBB 
-)
-
-if(TARGET CGAL::Eigen3_support)
-  target_link_libraries(skeletonization PRIVATE CGAL::Eigen3_support)
-endif()
+target_link_libraries(skeletonization PRIVATE preprocess_core)

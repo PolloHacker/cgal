@@ -2,6 +2,8 @@
 #include <fstream>
 #include <vector>
 #include <string>
+#include <string_view>
+#include <charconv>
 #include <sstream>
 #include <memory>
 #include <cmath>
@@ -151,31 +153,42 @@ inline double read_binary_value(const char* ptr, PlyType type) {
     }
 }
 
-// Fast tokenizer for ASCII files
-inline std::vector<std::string> tokenize(const std::string& str) {
-    std::vector<std::string> tokens;
-    std::string token;
-    for (char c : str) {
-        if (std::isspace(static_cast<unsigned char>(c))) {
-            if (!token.empty()) {
-                tokens.push_back(token);
-                token.clear();
-            }
-        } else {
-            token.push_back(c);
+// Fast zero-allocation tokenizer for ASCII files
+inline void tokenize_to_views(std::string_view str, std::vector<std::string_view>& tokens) {
+    tokens.clear();
+    size_t start = 0;
+    while (start < str.size()) {
+        // Skip leading whitespace
+        while (start < str.size() && std::isspace(static_cast<unsigned char>(str[start]))) {
+            ++start;
         }
+        if (start >= str.size()) {
+            break;
+        }
+        size_t end = start;
+        while (end < str.size() && !std::isspace(static_cast<unsigned char>(str[end]))) {
+            ++end;
+        }
+        tokens.push_back(str.substr(start, end - start));
+        start = end;
     }
-    if (!token.empty()) {
-        tokens.push_back(token);
-    }
-    return tokens;
 }
 
-inline double parse_ascii_value(const std::string& token, PlyType type) {
+inline double parse_ascii_view(std::string_view sv, PlyType type) {
     if (type == PlyType::FLOAT32 || type == PlyType::FLOAT64) {
-        return std::stod(token);
+        double val = 0.0;
+        auto [ptr, ec] = std::from_chars(sv.data(), sv.data() + sv.size(), val);
+        if (ec == std::errc{}) {
+            return val;
+        }
+        return std::stod(std::string(sv));
     } else {
-        return static_cast<double>(std::stoll(token));
+        long long val = 0;
+        auto [ptr, ec] = std::from_chars(sv.data(), sv.data() + sv.size(), val);
+        if (ec == std::errc{}) {
+            return static_cast<double>(val);
+        }
+        return static_cast<double>(std::stoll(std::string(sv)));
     }
 }
 
@@ -453,6 +466,7 @@ int main(int argc, char* argv[]) {
     
     std::vector<char> record_buf(header.vertex_byte_size);
     std::string ascii_line;
+    std::vector<std::string_view> tokens;
     
     for (std::size_t i = 0; i < header.vertex_count; ++i) {
         double x = 0.0, y = 0.0, z = 0.0;
@@ -475,15 +489,15 @@ int main(int argc, char* argv[]) {
                 std::cerr << "Warning: Read failed or reached unexpected EOF at line " << i << "\n";
                 break;
             }
-            std::vector<std::string> tokens = tokenize(ascii_line);
+            tokenize_to_views(ascii_line, tokens);
             if (tokens.size() < header.vertex_properties.size()) {
                 std::cerr << "Warning: Incomplete ASCII vertex data at index " << i << ". Skipping.\n";
                 continue;
             }
             
-            x = parse_ascii_value(tokens[header.idx_x], header.vertex_properties[header.idx_x].type);
-            y = parse_ascii_value(tokens[header.idx_y], header.vertex_properties[header.idx_y].type);
-            z = parse_ascii_value(tokens[header.idx_z], header.vertex_properties[header.idx_z].type);
+            x = parse_ascii_view(tokens[header.idx_x], header.vertex_properties[header.idx_x].type);
+            y = parse_ascii_view(tokens[header.idx_y], header.vertex_properties[header.idx_y].type);
+            z = parse_ascii_view(tokens[header.idx_z], header.vertex_properties[header.idx_z].type);
         }
         
         // Update bounding box
@@ -521,19 +535,18 @@ int main(int argc, char* argv[]) {
                 }
             } else {
                 // ASCII decode properties
-                std::vector<std::string> tokens = tokenize(ascii_line);
                 if (has_normals) {
-                    nx = parse_ascii_value(tokens[header.idx_nx], header.vertex_properties[header.idx_nx].type);
-                    ny = parse_ascii_value(tokens[header.idx_ny], header.vertex_properties[header.idx_ny].type);
-                    nz = parse_ascii_value(tokens[header.idx_nz], header.vertex_properties[header.idx_nz].type);
+                    nx = parse_ascii_view(tokens[header.idx_nx], header.vertex_properties[header.idx_nx].type);
+                    ny = parse_ascii_view(tokens[header.idx_ny], header.vertex_properties[header.idx_ny].type);
+                    nz = parse_ascii_view(tokens[header.idx_nz], header.vertex_properties[header.idx_nz].type);
                 }
                 if (has_colors) {
-                    r = parse_ascii_value(tokens[header.idx_red], header.vertex_properties[header.idx_red].type);
-                    g = parse_ascii_value(tokens[header.idx_green], header.vertex_properties[header.idx_green].type);
-                    b = parse_ascii_value(tokens[header.idx_blue], header.vertex_properties[header.idx_blue].type);
+                    r = parse_ascii_view(tokens[header.idx_red], header.vertex_properties[header.idx_red].type);
+                    g = parse_ascii_view(tokens[header.idx_green], header.vertex_properties[header.idx_green].type);
+                    b = parse_ascii_view(tokens[header.idx_blue], header.vertex_properties[header.idx_blue].type);
                 }
                 if (has_intensity) {
-                    intensity = parse_ascii_value(tokens[header.idx_intensity], header.vertex_properties[header.idx_intensity].type);
+                    intensity = parse_ascii_view(tokens[header.idx_intensity], header.vertex_properties[header.idx_intensity].type);
                 }
             }
             

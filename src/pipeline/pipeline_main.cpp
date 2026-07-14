@@ -49,14 +49,18 @@ const std::map<std::string, std::pair<double, double>> kPresetWidths = {
 };
 
 template <typename Scalar>
-std::vector<wnnc::Vec3<Scalar>> normalizeToUnitCube(const std::vector<wnnc::Vec3<double>>& points) {
+std::vector<wnnc::Vec3<Scalar>> normalizeToUnitCube(const mesh_reconstruction::Point_set& points) {
+    if (points.empty()) return {};
     constexpr double kBoundingBoxScale = 1.1;
 
-    wnnc::Vec3<double> boxMin = points.front();
-    wnnc::Vec3<double> boxMax = points.front();
-    for (const wnnc::Vec3<double>& p : points) {
-        boxMin = {std::min(boxMin.x, p.x), std::min(boxMin.y, p.y), std::min(boxMin.z, p.z)};
-        boxMax = {std::max(boxMax.x, p.x), std::max(boxMax.y, p.y), std::max(boxMax.z, p.z)};
+    auto it = points.begin();
+    auto first_p = points.point(*it);
+    wnnc::Vec3<double> boxMin{first_p.x(), first_p.y(), first_p.z()};
+    wnnc::Vec3<double> boxMax = boxMin;
+    for (; it != points.end(); ++it) {
+        auto p = points.point(*it);
+        boxMin = {std::min(boxMin.x, p.x()), std::min(boxMin.y, p.y()), std::min(boxMin.z, p.z())};
+        boxMax = {std::max(boxMax.x, p.x()), std::max(boxMax.y, p.y()), std::max(boxMax.z, p.z())};
     }
     const wnnc::Vec3<double> center = (boxMin + boxMax) * 0.5;
     const wnnc::Vec3<double> extent = boxMax - boxMin;
@@ -65,20 +69,25 @@ std::vector<wnnc::Vec3<Scalar>> normalizeToUnitCube(const std::vector<wnnc::Vec3
 
     std::vector<wnnc::Vec3<Scalar>> normalized;
     normalized.reserve(points.size());
-    for (const wnnc::Vec3<double>& p : points) {
-        normalized.push_back(((p - center) * scale).template cast<Scalar>());
+    for (auto jt = points.begin(); jt != points.end(); ++jt) {
+        auto p = points.point(*jt);
+        normalized.push_back((((wnnc::Vec3<double>{p.x(), p.y(), p.z()}) - center) * scale).template cast<Scalar>());
     }
     return normalized;
 }
 
-// Basic PLY exporter for PipelineMesh
-bool save_mesh_ply(const fs::path& filepath, const PipelineMesh& mesh) {
+// Basic PLY exporter for PipelineMesh (supports binary or ascii)
+bool save_mesh_ply(const fs::path& filepath, const PipelineMesh& mesh, bool binary = true) {
     std::ofstream file(filepath, std::ios::binary);
     if (!file) {
         return false;
     }
     file << "ply\n";
-    file << "format ascii 1.0\n";
+    if (binary) {
+        file << "format binary_little_endian 1.0\n";
+    } else {
+        file << "format ascii 1.0\n";
+    }
     file << "element vertex " << mesh.vertices.size() << "\n";
     file << "property double x\n";
     file << "property double y\n";
@@ -87,15 +96,28 @@ bool save_mesh_ply(const fs::path& filepath, const PipelineMesh& mesh) {
     file << "element face " << mesh.faces.size() << "\n";
     file << "property list uchar int vertex_indices\n";
     file << "end_header\n";
-    for (const auto& v : mesh.vertices) {
-        file << v.x << " " << v.y << " " << v.z << " " << v.value << "\n";
-    }
-    for (const auto& f : mesh.faces) {
-        file << f.size();
-        for (auto idx : f) {
-            file << " " << idx;
+    if (binary) {
+        if (!mesh.vertices.empty()) {
+            file.write(reinterpret_cast<const char*>(mesh.vertices.data()), mesh.vertices.size() * sizeof(PipelineMesh::Vertex));
         }
-        file << "\n";
+        for (const auto& f : mesh.faces) {
+            unsigned char count = static_cast<unsigned char>(f.size());
+            file.write(reinterpret_cast<const char*>(&count), 1);
+            if (count > 0) {
+                file.write(reinterpret_cast<const char*>(f.data()), count * sizeof(int));
+            }
+        }
+    } else {
+        for (const auto& v : mesh.vertices) {
+            file << v.x << " " << v.y << " " << v.z << " " << v.value << "\n";
+        }
+        for (const auto& f : mesh.faces) {
+            file << f.size();
+            for (auto idx : f) {
+                file << " " << idx;
+            }
+            file << "\n";
+        }
     }
     return true;
 }
@@ -141,6 +163,7 @@ int main(int argc, char* argv[]) {
     bool save_stage1 = false;
     bool save_stage2 = false;
     bool save_stage3 = false;
+    bool ascii_ply = false;
 
     // CLI configuration
     app.add_option("input", input_path, "Input point cloud PLY file")->required()->check(CLI::ExistingFile);
@@ -192,6 +215,7 @@ int main(int argc, char* argv[]) {
     debug_group->add_flag("--save-stage1", save_stage1, "Save preprocessed points PLY (Stage 1)");
     debug_group->add_flag("--save-stage2", save_stage2, "Save point-normals XYZ (Stage 2)");
     debug_group->add_flag("--save-stage3", save_stage3, "Save untrimmed Poisson mesh PLY (Stage 3)");
+    debug_group->add_flag("--ascii-ply", ascii_ply, "Save PLY files in ASCII format instead of binary");
 
     CLI11_PARSE(app, argc, argv);
 
@@ -279,18 +303,11 @@ int main(int argc, char* argv[]) {
     // STAGE 2: Normal Estimation using WNNC (C++)
     // -------------------------------------------------------------------------
     std::cout << "\n--- [Stage 2] Running WNNC Normal Estimation ---\n";
-    std::vector<wnnc::Vec3<double>> rawPoints;
-    rawPoints.reserve(points.size());
-    for (auto it = points.begin(); it != points.end(); ++it) {
-        auto p = points.point(*it);
-        rawPoints.push_back({p.x(), p.y(), p.z()});
-    }
-
-    std::cout << "Running WNNC with " << rawPoints.size() << " points.\n";
+    std::cout << "Running WNNC with " << points.size() << " points.\n";
     auto wnnc_start = std::chrono::steady_clock::now();
     
     // Normalize coordinates to unit cube for the octree and kernel presets
-    std::vector<wnnc::Vec3<double>> normalized = normalizeToUnitCube<double>(rawPoints);
+    std::vector<wnnc::Vec3<double>> normalized = normalizeToUnitCube<double>(points);
     wnnc::WindingNumberOperator<double> windingNumber(normalized);
 
     auto onIteration = [wnnc_progress](int done, int total) {
@@ -308,18 +325,28 @@ int main(int argc, char* argv[]) {
     // STAGE 3: Screened Poisson Reconstruction (In-Memory)
     // -------------------------------------------------------------------------
     std::cout << "\n--- [Stage 3] Running Screened Poisson Reconstruction ---\n";
-    std::vector<PipelinePoint> pipeline_pts(rawPoints.size());
-    for (size_t i = 0; i < rawPoints.size(); ++i) {
-        pipeline_pts[i] = {rawPoints[i].x, rawPoints[i].y, rawPoints[i].z, normals[i].x, normals[i].y, normals[i].z};
+    std::vector<PipelinePoint> pipeline_pts;
+    pipeline_pts.reserve(points.size());
+    size_t idx = 0;
+    for (auto it = points.begin(); it != points.end(); ++it, ++idx) {
+        auto p = points.point(*it);
+        pipeline_pts.push_back({p.x(), p.y(), p.z(), normals[idx].x, normals[idx].y, normals[idx].z});
     }
 
-    // Now that pipeline_pts are constructed, we can move rawPoints and normals to the background thread
     if (save_stage2) {
         fs::path s2_out_dir = stage2_dir / stem;
         fs::create_directories(s2_out_dir);
         fs::path s2_out_file = s2_out_dir / (stem + ".xyz");
-        spawn_bg_task(bg_tasks, [s2_out_file, pts = std::move(rawPoints), nls = std::move(normals)]() {
+        spawn_bg_task(bg_tasks, [s2_out_file, pipeline_pts_copy = pipeline_pts]() {
             std::cout << "Saving WNNC outputs to: " << s2_out_file << "\n";
+            std::vector<wnnc::Vec3<double>> pts;
+            std::vector<wnnc::Vec3<double>> nls;
+            pts.reserve(pipeline_pts_copy.size());
+            nls.reserve(pipeline_pts_copy.size());
+            for (const auto& p : pipeline_pts_copy) {
+                pts.push_back({p.x, p.y, p.z});
+                nls.push_back({p.nx, p.ny, p.nz});
+            }
             wnnc::io::saveXyzWithNormals(s2_out_file, pts, nls);
         });
     }
@@ -332,9 +359,9 @@ int main(int argc, char* argv[]) {
 
     fs::path s3_out_file = stage3_dir / (stem + "_watertight.ply");
     if (save_stage3) {
-        spawn_bg_task(bg_tasks, [s3_out_file, mesh = untrimmed_mesh]() {
+        spawn_bg_task(bg_tasks, [s3_out_file, mesh = untrimmed_mesh, ascii_ply]() {
             std::cout << "Saving untrimmed watertight mesh to: " << s3_out_file << "\n";
-            if (!save_mesh_ply(s3_out_file, mesh)) {
+            if (!save_mesh_ply(s3_out_file, mesh, !ascii_ply)) {
                 std::cerr << "Warning: Failed to save untrimmed watertight mesh.\n";
             }
         });
@@ -353,9 +380,9 @@ int main(int argc, char* argv[]) {
         std::cout << "Trimmed mesh has " << final_mesh.vertices.size() << " vertices, " << final_mesh.faces.size() << " faces.\n";
 
         fs::path s4_out_file = stage4_dir / (stem + "_watertight_trimmed.ply");
-        spawn_bg_task(bg_tasks, [s4_out_file, mesh = final_mesh]() {
+        spawn_bg_task(bg_tasks, [s4_out_file, mesh = final_mesh, ascii_ply]() {
             std::cout << "Saving trimmed mesh to: " << s4_out_file << "\n";
-            if (!save_mesh_ply(s4_out_file, mesh)) {
+            if (!save_mesh_ply(s4_out_file, mesh, !ascii_ply)) {
                 std::cerr << "Warning: Failed to save trimmed mesh.\n";
             }
         });
@@ -363,9 +390,9 @@ int main(int argc, char* argv[]) {
         std::cout << "\n--- [Stage 4] Skipping Surface Trimming (Trimming Disabled) ---\n";
         // Write the untrimmed mesh to the trimmed directory to ensure a final mesh always exists at the expected location
         fs::path s4_out_file = stage4_dir / (stem + "_watertight_trimmed.ply");
-        spawn_bg_task(bg_tasks, [s4_out_file, mesh = final_mesh]() {
+        spawn_bg_task(bg_tasks, [s4_out_file, mesh = final_mesh, ascii_ply]() {
             std::cout << "Saving final watertight (untrimmed) mesh to: " << s4_out_file << "\n";
-            if (!save_mesh_ply(s4_out_file, mesh)) {
+            if (!save_mesh_ply(s4_out_file, mesh, !ascii_ply)) {
                 std::cerr << "Warning: Failed to save final mesh.\n";
             }
         });
@@ -404,6 +431,7 @@ int main(int argc, char* argv[]) {
         std::size_t target_edges = 75000;
         Stop_predicate stop(target_edges);
         int r = CGAL::Surface_mesh_simplification::edge_collapse(cgal_mesh, stop);
+        cgal_mesh.collect_garbage();
         std::cout << "Decimation finished. Removed " << r << " edges. Current mesh faces: " << num_faces(cgal_mesh) << "\n";
 
         std::cout << "Re-normalizing decimated mesh...\n";

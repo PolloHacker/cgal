@@ -56,6 +56,7 @@ bool normalize_mesh_for_skeletonization(Triangle_mesh &mesh,
  * \return `true` when serialization succeeds.
  */
 bool write_mesh_ply(const std::filesystem::path &output_mesh_path,
-                    const Triangle_mesh &mesh);
+                    const Triangle_mesh &mesh,
+                    bool binary = true);
 
 } // namespace mesh_reconstruction

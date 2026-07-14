@@ -63,8 +63,8 @@ std::vector<Vec3<Scalar>> estimateNormals(const WindingNumberOperator<Scalar>& w
         // passes; by linearity one pass over the defect is identical, up to
         // the treecode's far-field approximation.)
         std::vector<Scalar> defect = windingNumber.applyA(mu, smoothingWidths);
-        for (Scalar& value : defect) {
-            value = kTargetWindingNumber - value;
+        for (std::size_t i = 0; i < n; ++i) {
+            defect[i] = kTargetWindingNumber - defect[i];
         }
         const std::vector<Vec3<Scalar>> residual =
             windingNumber.applyATransposed(defect, smoothingWidths);
