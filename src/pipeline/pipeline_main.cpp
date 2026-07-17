@@ -273,15 +273,15 @@ int main(int argc, char* argv[]) {
     // -------------------------------------------------------------------------
     auto start_time = std::chrono::steady_clock::now();
     std::cout << "\n--- [Stage 1] Running Point Cloud Preprocessing ---\n";
-    mesh_reconstruction::Point_set points;
-    if (!load_oriented_points(input_path, points, prep_opts)) {
+    auto points = std::make_shared<mesh_reconstruction::Point_set>();
+    if (!load_oriented_points(input_path, *points, prep_opts)) {
         std::cerr << "Error during Stage 1 point cloud loading.\n";
         wait_bg_tasks();
         return EXIT_FAILURE;
     }
 
     double average_spacing = 0.0;
-    if (!preprocess_points(points, prep_opts, average_spacing)) {
+    if (!preprocess_points(*points, prep_opts, average_spacing)) {
         std::cerr << "Error during Stage 1 point cloud preprocessing.\n";
         wait_bg_tasks();
         return EXIT_FAILURE;
@@ -291,9 +291,9 @@ int main(int argc, char* argv[]) {
         fs::path s1_out_dir = stage1_dir / stem;
         fs::create_directories(s1_out_dir);
         fs::path s1_out_file = s1_out_dir / (stem + "_stage1_preprocessed_points.ply");
-        spawn_bg_task(bg_tasks, [s1_out_file, points_copy = points]() {
+        spawn_bg_task(bg_tasks, [s1_out_file, points]() {
             std::cout << "Saving Stage 1 output to: " << s1_out_file << "\n";
-            if (!write_point_stage_visualization(s1_out_file, points_copy, "Preprocessed Point Cloud")) {
+            if (!write_point_stage_visualization(s1_out_file, *points, "Preprocessed Point Cloud")) {
                 std::cerr << "Warning: Failed to save Stage 1 preprocessed points.\n";
             }
         });
@@ -303,11 +303,11 @@ int main(int argc, char* argv[]) {
     // STAGE 2: Normal Estimation using WNNC (C++)
     // -------------------------------------------------------------------------
     std::cout << "\n--- [Stage 2] Running WNNC Normal Estimation ---\n";
-    std::cout << "Running WNNC with " << points.size() << " points.\n";
+    std::cout << "Running WNNC with " << points->size() << " points.\n";
     auto wnnc_start = std::chrono::steady_clock::now();
     
     // Normalize coordinates to unit cube for the octree and kernel presets
-    std::vector<wnnc::Vec3<double>> normalized = normalizeToUnitCube<double>(points);
+    std::vector<wnnc::Vec3<double>> normalized = normalizeToUnitCube<double>(*points);
     wnnc::WindingNumberOperator<double> windingNumber(normalized);
 
     auto onIteration = [wnnc_progress](int done, int total) {
@@ -325,25 +325,25 @@ int main(int argc, char* argv[]) {
     // STAGE 3: Screened Poisson Reconstruction (In-Memory)
     // -------------------------------------------------------------------------
     std::cout << "\n--- [Stage 3] Running Screened Poisson Reconstruction ---\n";
-    std::vector<PipelinePoint> pipeline_pts;
-    pipeline_pts.reserve(points.size());
+    auto pipeline_pts = std::make_shared<std::vector<PipelinePoint>>();
+    pipeline_pts->reserve(points->size());
     size_t idx = 0;
-    for (auto it = points.begin(); it != points.end(); ++it, ++idx) {
-        auto p = points.point(*it);
-        pipeline_pts.push_back({p.x(), p.y(), p.z(), normals[idx].x, normals[idx].y, normals[idx].z});
+    for (auto it = points->begin(); it != points->end(); ++it, ++idx) {
+        auto p = points->point(*it);
+        pipeline_pts->push_back({p.x(), p.y(), p.z(), normals[idx].x, normals[idx].y, normals[idx].z});
     }
 
     if (save_stage2) {
         fs::path s2_out_dir = stage2_dir / stem;
         fs::create_directories(s2_out_dir);
         fs::path s2_out_file = s2_out_dir / (stem + ".xyz");
-        spawn_bg_task(bg_tasks, [s2_out_file, pipeline_pts_copy = pipeline_pts]() {
+        spawn_bg_task(bg_tasks, [s2_out_file, pipeline_pts]() {
             std::cout << "Saving WNNC outputs to: " << s2_out_file << "\n";
             std::vector<wnnc::Vec3<double>> pts;
             std::vector<wnnc::Vec3<double>> nls;
-            pts.reserve(pipeline_pts_copy.size());
-            nls.reserve(pipeline_pts_copy.size());
-            for (const auto& p : pipeline_pts_copy) {
+            pts.reserve(pipeline_pts->size());
+            nls.reserve(pipeline_pts->size());
+            for (const auto& p : *pipeline_pts) {
                 pts.push_back({p.x, p.y, p.z});
                 nls.push_back({p.nx, p.ny, p.nz});
             }
@@ -352,16 +352,16 @@ int main(int argc, char* argv[]) {
     }
 
     auto poisson_start = std::chrono::steady_clock::now();
-    PipelineMesh untrimmed_mesh = run_poisson_reconstruction(pipeline_pts, poisson_opts);
+    auto untrimmed_mesh = std::make_shared<PipelineMesh>(run_poisson_reconstruction(*pipeline_pts, poisson_opts));
     double poisson_duration = std::chrono::duration<double>(std::chrono::steady_clock::now() - poisson_start).count();
     std::cout << "Poisson reconstruction finished in memory. Duration: " << poisson_duration << " seconds.\n";
-    std::cout << "Untrimmed watertight mesh has " << untrimmed_mesh.vertices.size() << " vertices, " << untrimmed_mesh.faces.size() << " faces.\n";
+    std::cout << "Untrimmed watertight mesh has " << untrimmed_mesh->vertices.size() << " vertices, " << untrimmed_mesh->faces.size() << " faces.\n";
 
     fs::path s3_out_file = stage3_dir / (stem + "_watertight.ply");
     if (save_stage3) {
-        spawn_bg_task(bg_tasks, [s3_out_file, mesh = untrimmed_mesh, ascii_ply]() {
+        spawn_bg_task(bg_tasks, [s3_out_file, untrimmed_mesh, ascii_ply]() {
             std::cout << "Saving untrimmed watertight mesh to: " << s3_out_file << "\n";
-            if (!save_mesh_ply(s3_out_file, mesh, !ascii_ply)) {
+            if (!save_mesh_ply(s3_out_file, *untrimmed_mesh, !ascii_ply)) {
                 std::cerr << "Warning: Failed to save untrimmed watertight mesh.\n";
             }
         });
@@ -370,17 +370,17 @@ int main(int argc, char* argv[]) {
     // -------------------------------------------------------------------------
     // STAGE 4: Surface Trimming (Optional, In-Memory)
     // -------------------------------------------------------------------------
-    PipelineMesh final_mesh = untrimmed_mesh;
+    PipelineMesh final_mesh = *untrimmed_mesh;
     if (enable_trim) {
         std::cout << "\n--- [Stage 4] Running Surface Trimming ---\n";
         auto trim_start = std::chrono::steady_clock::now();
-        final_mesh = trim_mesh(untrimmed_mesh, trim_opts);
+        final_mesh = trim_mesh(*untrimmed_mesh, trim_opts);
         double trim_duration = std::chrono::duration<double>(std::chrono::steady_clock::now() - trim_start).count();
         std::cout << "Trimming finished. Duration: " << trim_duration << " seconds.\n";
         std::cout << "Trimmed mesh has " << final_mesh.vertices.size() << " vertices, " << final_mesh.faces.size() << " faces.\n";
 
         fs::path s4_out_file = stage4_dir / (stem + "_watertight_trimmed.ply");
-        spawn_bg_task(bg_tasks, [s4_out_file, mesh = final_mesh, ascii_ply]() {
+        spawn_bg_task(bg_tasks, [s4_out_file, mesh = std::move(final_mesh), ascii_ply]() {
             std::cout << "Saving trimmed mesh to: " << s4_out_file << "\n";
             if (!save_mesh_ply(s4_out_file, mesh, !ascii_ply)) {
                 std::cerr << "Warning: Failed to save trimmed mesh.\n";
@@ -390,7 +390,7 @@ int main(int argc, char* argv[]) {
         std::cout << "\n--- [Stage 4] Skipping Surface Trimming (Trimming Disabled) ---\n";
         // Write the untrimmed mesh to the trimmed directory to ensure a final mesh always exists at the expected location
         fs::path s4_out_file = stage4_dir / (stem + "_watertight_trimmed.ply");
-        spawn_bg_task(bg_tasks, [s4_out_file, mesh = final_mesh, ascii_ply]() {
+        spawn_bg_task(bg_tasks, [s4_out_file, mesh = std::move(final_mesh), ascii_ply]() {
             std::cout << "Saving final watertight (untrimmed) mesh to: " << s4_out_file << "\n";
             if (!save_mesh_ply(s4_out_file, mesh, !ascii_ply)) {
                 std::cerr << "Warning: Failed to save final mesh.\n";
@@ -404,11 +404,11 @@ int main(int argc, char* argv[]) {
     std::cout << "\n--- [Stage 5] Running Mesh Skeletonization (on Stage 3 Untrimmed Mesh) ---\n";
     mesh_reconstruction::Triangle_mesh cgal_mesh;
     std::vector<mesh_reconstruction::Triangle_mesh::Vertex_index> vertex_indices;
-    vertex_indices.reserve(untrimmed_mesh.vertices.size());
-    for (const auto& v : untrimmed_mesh.vertices) {
+    vertex_indices.reserve(untrimmed_mesh->vertices.size());
+    for (const auto& v : untrimmed_mesh->vertices) {
         vertex_indices.push_back(cgal_mesh.add_vertex(mesh_reconstruction::Point(v.x, v.y, v.z)));
     }
-    for (const auto& f : untrimmed_mesh.faces) {
+    for (const auto& f : untrimmed_mesh->faces) {
         std::vector<mesh_reconstruction::Triangle_mesh::Vertex_index> face_v;
         face_v.reserve(f.size());
         for (auto idx : f) {
