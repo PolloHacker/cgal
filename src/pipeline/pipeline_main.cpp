@@ -209,6 +209,18 @@ int main(int argc, char* argv[]) {
     trim_group->add_option("--aRatio", trim_opts.islandAreaRatio, "Relative area of islands to retain")->capture_default_str();
     trim_group->add_flag("--removeIslands", trim_opts.removeIslands, "Remove small disconnected components")->capture_default_str();
 
+    // Skeletonization Options
+    auto skeleton_group = app.add_option_group("Skeletonization Options");
+    SkeletonizationParameters skeleton_opts;
+    bool no_medially_centered = false;
+    skeleton_group->add_option("--skel-max-triangle-angle", skeleton_opts.max_triangle_angle, "Max triangle angle threshold for face splitting")->capture_default_str();
+    skeleton_group->add_option("--skel-min-edge-length", skeleton_opts.min_edge_length, "Min edge length for collapse (0.0 for auto-calculation)")->capture_default_str();
+    skeleton_group->add_option("--skel-max-iterations", skeleton_opts.max_iterations, "Maximum number of iterations")->capture_default_str();
+    skeleton_group->add_option("--skel-area-variation-factor", skeleton_opts.area_variation_factor, "Area variation factor for convergence")->capture_default_str();
+    skeleton_group->add_option("--skel-quality-speed-tradeoff", skeleton_opts.quality_speed_tradeoff, "Quality/speed tradeoff parameter")->capture_default_str();
+    skeleton_group->add_flag("--skel-no-medially-centered", no_medially_centered, "Disable medially centered attraction (default: active)");
+    skeleton_group->add_option("--skel-medially-centered-speed-tradeoff", skeleton_opts.medially_centered_speed_tradeoff, "Medially centered speed tradeoff parameter")->capture_default_str();
+
     // Debugging / Intermediates
     auto debug_group = app.add_option_group("Debugging Options");
     debug_group->add_flag("--save-intermediate", save_intermediate, "Save all intermediate stage outputs");
@@ -218,6 +230,8 @@ int main(int argc, char* argv[]) {
     debug_group->add_flag("--ascii-ply", ascii_ply, "Save PLY files in ASCII format instead of binary");
 
     CLI11_PARSE(app, argc, argv);
+
+    skeleton_opts.is_medially_centered = !no_medially_centered;
 
     // Apply width config logic for WNNC
     if (widthConfig == "custom") {
@@ -444,7 +458,8 @@ int main(int argc, char* argv[]) {
 
     Skeleton skeleton;
     auto skeleton_start = std::chrono::steady_clock::now();
-    if (!skeletonize(cgal_mesh, skeleton)) {
+    MeanCurvatureFlowSkeletonizer skeletonizer(skeleton_opts);
+    if (!skeletonizer.skeletonize(cgal_mesh, skeleton)) {
         std::cerr << "Error: skeleton extraction failed or produced empty skeleton.\n";
         wait_bg_tasks();
         return EXIT_FAILURE;

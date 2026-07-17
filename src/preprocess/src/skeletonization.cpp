@@ -25,6 +25,8 @@ using Stop_predicate = CGAL::Surface_mesh_simplification::Count_stop_predicate<m
 #error "CGAL stop predicate header not found"
 #endif
 
+#include <CLI11.hpp>
+
 using Triangle_mesh = mesh_reconstruction::Triangle_mesh;
 
 int main(int argc, char *argv[]) {
@@ -41,13 +43,27 @@ int main(int argc, char *argv[]) {
   return EXIT_FAILURE;
 #endif
 
-  if (argc != 3) {
-    std::cerr << "Usage: " << argv[0] << " <input_mesh.ply> <output_prefix>\n";
-    return EXIT_FAILURE;
-  }
+  CLI::App app{"Standalone Mean Curvature Flow skeletonization"};
 
-  std::string input_mesh_path = argv[1];
-  std::string output_prefix = argv[2];
+  std::string input_mesh_path;
+  std::string output_prefix;
+  SkeletonizationParameters params;
+  bool no_medially_centered = false;
+
+  app.add_option("input_mesh", input_mesh_path, "Input mesh file (.ply)")->required()->check(CLI::ExistingFile);
+  app.add_option("output_prefix", output_prefix, "Prefix for output skeleton artifacts")->required();
+
+  app.add_option("--max-triangle-angle", params.max_triangle_angle, "Max triangle angle threshold for face splitting")->capture_default_str();
+  app.add_option("--min-edge-length", params.min_edge_length, "Min edge length for collapse (0.0 for auto-calculation)")->capture_default_str();
+  app.add_option("--max-iterations", params.max_iterations, "Maximum number of iterations")->capture_default_str();
+  app.add_option("--area-variation-factor", params.area_variation_factor, "Area variation factor for convergence")->capture_default_str();
+  app.add_option("--quality-speed-tradeoff", params.quality_speed_tradeoff, "Quality/speed tradeoff parameter")->capture_default_str();
+  app.add_flag("--no-medially-centered", no_medially_centered, "Disable medially centered attraction (default: active)");
+  app.add_option("--medially-centered-speed-tradeoff", params.medially_centered_speed_tradeoff, "Medially centered speed tradeoff parameter")->capture_default_str();
+
+  CLI11_PARSE(app, argc, argv);
+
+  params.is_medially_centered = !no_medially_centered;
 
   std::cout << "Loading mesh from: " << input_mesh_path << "\n";
   Triangle_mesh mesh;
@@ -84,8 +100,9 @@ int main(int argc, char *argv[]) {
     }
   }
 
+  MeanCurvatureFlowSkeletonizer skeletonizer(params);
   Skeleton skeleton;
-  if (!skeletonize(mesh, skeleton)) {
+  if (!skeletonizer.skeletonize(mesh, skeleton)) {
     std::cerr << "Error: skeleton extraction produced an empty skeleton.\n";
     return EXIT_FAILURE;
   }

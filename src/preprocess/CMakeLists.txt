@@ -129,11 +129,15 @@ add_executable(tests
   test/test_validation.cpp
   test/test_point_cloud_processing.cpp
   test/test_mesh_reconstruction.cpp
+  test/test_skeletonization.cpp
 )
 target_link_libraries(tests PRIVATE preprocess_core)
 
 # Skeletonization executable
 add_executable(skeletonization
   src/skeletonization.cpp
+)
+target_include_directories(skeletonization PRIVATE
+  ${CMAKE_SOURCE_DIR}/src/wnnc/cpp/third_party/CLI11
 )
 target_link_libraries(skeletonization PRIVATE preprocess_core)

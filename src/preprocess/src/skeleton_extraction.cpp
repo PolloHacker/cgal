@@ -111,18 +111,37 @@ bool write_correspondence(const std::filesystem::path &out_path,
 
 } // namespace
 
-bool skeletonize(Triangle_mesh &mesh, Skeleton &skeleton) {
+std::unique_ptr<Skeletonization> MeanCurvatureFlowSkeletonizer::create_mcf(const mesh_reconstruction::Triangle_mesh &mesh) const {
+  auto mcf = std::make_unique<Skeletonization>(mesh);
+
+  mcf->set_max_triangle_angle(params_.max_triangle_angle);
+  if (params_.min_edge_length > 0.0) {
+    mcf->set_min_edge_length(params_.min_edge_length);
+  }
+  mcf->set_max_iterations(params_.max_iterations);
+  mcf->set_area_variation_factor(params_.area_variation_factor);
+  mcf->set_quality_speed_tradeoff(params_.quality_speed_tradeoff);
+  mcf->set_is_medially_centered(params_.is_medially_centered);
+  mcf->set_medially_centered_speed_tradeoff(params_.medially_centered_speed_tradeoff);
+
+  return mcf;
+}
+
+bool MeanCurvatureFlowSkeletonizer::skeletonize(Triangle_mesh &mesh, Skeleton &skeleton) {
   log_stage("3. Mean curvature flow skeletonization");
 
-  // The mean curvature flow skeletonization algorithm a method that works
-  // by simulating cloth on the surface of the mesh, which gradually contracts
-  // it while preserving its topology.
-  CGAL::extract_mean_curvature_flow_skeleton(mesh, skeleton);
+  auto mcf = create_mcf(mesh);
+  (*mcf)(skeleton);
 
   std::cout << "Skeleton vertices: " << boost::num_vertices(skeleton) << "\n";
   std::cout << "Skeleton edges: " << boost::num_edges(skeleton) << "\n";
 
   return boost::num_vertices(skeleton) > 0 && boost::num_edges(skeleton) > 0;
+}
+
+bool skeletonize(Triangle_mesh &mesh, Skeleton &skeleton) {
+  MeanCurvatureFlowSkeletonizer default_skeletonizer;
+  return default_skeletonizer.skeletonize(mesh, skeleton);
 }
 
 bool write_skeleton_outputs(const std::string &output_prefix, const Skeleton &skeleton,
