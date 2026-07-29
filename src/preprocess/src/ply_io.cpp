@@ -16,6 +16,7 @@
 
 #include <tbb/concurrent_unordered_set.h>
 #include <CGAL/Point_set_3/IO.h>
+#include "parallel_decimator.h"
 
 namespace mesh_reconstruction {
 
@@ -367,12 +368,19 @@ bool load_spatial_subsampled_ply(const std::string &filepath,
         }
     }
     
-    tbb::concurrent_unordered_set<VoxelKey, VoxelKeyHash> voxel_grid;
-    
+    DecimationOptions dec_opts;
+    dec_opts.min_distance = min_distance;
+    dec_opts.enable_cuda = true;
+    auto decimator = create_decimator(dec_opts);
+
+    std::unordered_set<VoxelKey, VoxelKeyHash> voxel_grid;
+    std::vector<Point3D> chunk_buffer;
+    chunk_buffer.reserve(10000000);
+
     std::vector<char> record_buf(header.vertex_byte_size);
     std::string ascii_line;
     std::vector<std::string_view> tokens;
-    
+
     for (std::size_t i = 0; i < header.vertex_count; ++i) {
         double x = 0.0, y = 0.0, z = 0.0;
         double nx = 0.0, ny = 0.0, nz = 0.0;
@@ -386,6 +394,19 @@ bool load_spatial_subsampled_ply(const std::string &filepath,
             x = read_binary_value(record_buf.data() + header.vertex_properties[header.idx_x].offset, header.vertex_properties[header.idx_x].type);
             y = read_binary_value(record_buf.data() + header.vertex_properties[header.idx_y].offset, header.vertex_properties[header.idx_y].type);
             z = read_binary_value(record_buf.data() + header.vertex_properties[header.idx_z].offset, header.vertex_properties[header.idx_z].type);
+            if (has_normals) {
+                nx = read_binary_value(record_buf.data() + header.vertex_properties[header.idx_nx].offset, header.vertex_properties[header.idx_nx].type);
+                ny = read_binary_value(record_buf.data() + header.vertex_properties[header.idx_ny].offset, header.vertex_properties[header.idx_ny].type);
+                nz = read_binary_value(record_buf.data() + header.vertex_properties[header.idx_nz].offset, header.vertex_properties[header.idx_nz].type);
+            }
+            if (has_colors) {
+                r = read_binary_value(record_buf.data() + header.vertex_properties[header.idx_red].offset, header.vertex_properties[header.idx_red].type);
+                g = read_binary_value(record_buf.data() + header.vertex_properties[header.idx_green].offset, header.vertex_properties[header.idx_green].type);
+                b = read_binary_value(record_buf.data() + header.vertex_properties[header.idx_blue].offset, header.vertex_properties[header.idx_blue].type);
+            }
+            if (has_intensity) {
+                intensity = read_binary_value(record_buf.data() + header.vertex_properties[header.idx_intensity].offset, header.vertex_properties[header.idx_intensity].type);
+            }
         } else {
             if (!get_line_safe(file, ascii_line)) {
                 break;
@@ -397,68 +418,58 @@ bool load_spatial_subsampled_ply(const std::string &filepath,
             x = parse_ascii_view(tokens[header.idx_x], header.vertex_properties[header.idx_x].type);
             y = parse_ascii_view(tokens[header.idx_y], header.vertex_properties[header.idx_y].type);
             z = parse_ascii_view(tokens[header.idx_z], header.vertex_properties[header.idx_z].type);
-        }
-        
-        int64_t gx = static_cast<int64_t>(std::floor(x / min_distance));
-        int64_t gy = static_cast<int64_t>(std::floor(y / min_distance));
-        int64_t gz = static_cast<int64_t>(std::floor(z / min_distance));
-        VoxelKey key = { gx, gy, gz };
-        
-        if (voxel_grid.insert(key).second) {
-            Point p(x, y, z);
-            Point_set::Index idx = *(points.insert(p));
-            
-            if (header.format == PlyHeader::Format::BINARY_LE) {
-                if (has_normals) {
-                    nx = read_binary_value(record_buf.data() + header.vertex_properties[header.idx_nx].offset, header.vertex_properties[header.idx_nx].type);
-                    ny = read_binary_value(record_buf.data() + header.vertex_properties[header.idx_ny].offset, header.vertex_properties[header.idx_ny].type);
-                    nz = read_binary_value(record_buf.data() + header.vertex_properties[header.idx_nz].offset, header.vertex_properties[header.idx_nz].type);
-                }
-                if (has_colors) {
-                    r = read_binary_value(record_buf.data() + header.vertex_properties[header.idx_red].offset, header.vertex_properties[header.idx_red].type);
-                    g = read_binary_value(record_buf.data() + header.vertex_properties[header.idx_green].offset, header.vertex_properties[header.idx_green].type);
-                    b = read_binary_value(record_buf.data() + header.vertex_properties[header.idx_blue].offset, header.vertex_properties[header.idx_blue].type);
-                }
-                if (has_intensity) {
-                    intensity = read_binary_value(record_buf.data() + header.vertex_properties[header.idx_intensity].offset, header.vertex_properties[header.idx_intensity].type);
-                }
-            } else {
-                if (has_normals) {
-                    nx = parse_ascii_view(tokens[header.idx_nx], header.vertex_properties[header.idx_nx].type);
-                    ny = parse_ascii_view(tokens[header.idx_ny], header.vertex_properties[header.idx_ny].type);
-                    nz = parse_ascii_view(tokens[header.idx_nz], header.vertex_properties[header.idx_nz].type);
-                }
-                if (has_colors) {
-                    r = parse_ascii_view(tokens[header.idx_red], header.vertex_properties[header.idx_red].type);
-                    g = parse_ascii_view(tokens[header.idx_green], header.vertex_properties[header.idx_green].type);
-                    b = parse_ascii_view(tokens[header.idx_blue], header.vertex_properties[header.idx_blue].type);
-                }
-                if (has_intensity) {
-                    intensity = parse_ascii_view(tokens[header.idx_intensity], header.vertex_properties[header.idx_intensity].type);
-                }
+            if (has_normals) {
+                nx = parse_ascii_view(tokens[header.idx_nx], header.vertex_properties[header.idx_nx].type);
+                ny = parse_ascii_view(tokens[header.idx_ny], header.vertex_properties[header.idx_ny].type);
+                nz = parse_ascii_view(tokens[header.idx_nz], header.vertex_properties[header.idx_nz].type);
             }
-            
-            points.normal(idx) = Vector(nx, ny, nz);
-            
             if (has_colors) {
-                red_map[idx] = to_uchar(r, header.vertex_properties[header.idx_red].type);
-                green_map[idx] = to_uchar(g, header.vertex_properties[header.idx_green].type);
-                blue_map[idx] = to_uchar(b, header.vertex_properties[header.idx_blue].type);
+                r = parse_ascii_view(tokens[header.idx_red], header.vertex_properties[header.idx_red].type);
+                g = parse_ascii_view(tokens[header.idx_green], header.vertex_properties[header.idx_green].type);
+                b = parse_ascii_view(tokens[header.idx_blue], header.vertex_properties[header.idx_blue].type);
             }
             if (has_intensity) {
-                if (intensity_is_double) {
-                    intensity_map_double[idx] = intensity;
-                } else {
-                    intensity_map_float[idx] = static_cast<float>(intensity);
-                }
+                intensity = parse_ascii_view(tokens[header.idx_intensity], header.vertex_properties[header.idx_intensity].type);
             }
         }
-        
-        if ((i + 1) % 10000000 == 0 || i + 1 == header.vertex_count) {
+
+        Point3D pt;
+        pt.x = x; pt.y = y; pt.z = z;
+        pt.nx = nx; pt.ny = ny; pt.nz = nz;
+        pt.r = static_cast<uint8_t>(r);
+        pt.g = static_cast<uint8_t>(g);
+        pt.b = static_cast<uint8_t>(b);
+        pt.intensity = static_cast<float>(intensity);
+        chunk_buffer.push_back(pt);
+
+        if (chunk_buffer.size() == 10000000 || i + 1 == header.vertex_count) {
+            DecimationResult res = decimator->decimate(chunk_buffer, dec_opts);
+            for (const auto& p : res.points) {
+                VoxelKey key = VoxelKey::from_point(p, min_distance);
+                if (voxel_grid.insert(key).second) {
+                    Point_set::Index idx = *(points.insert(Point(p.x, p.y, p.z)));
+                    if (has_normals) {
+                        points.normal(idx) = Vector(p.nx, p.ny, p.nz);
+                    }
+                    if (has_colors) {
+                        red_map[idx] = to_uchar(p.r, header.vertex_properties[header.idx_red].type);
+                        green_map[idx] = to_uchar(p.g, header.vertex_properties[header.idx_green].type);
+                        blue_map[idx] = to_uchar(p.b, header.vertex_properties[header.idx_blue].type);
+                    }
+                    if (has_intensity) {
+                        if (intensity_is_double) {
+                            intensity_map_double[idx] = static_cast<double>(p.intensity);
+                        } else {
+                            intensity_map_float[idx] = p.intensity;
+                        }
+                    }
+                }
+            }
+            chunk_buffer.clear();
             double progress_pct = 100.0 * (i + 1) / header.vertex_count;
-            std::cout << "Parsed: " << (i + 1) << " / " << header.vertex_count 
+            std::cout << "Parsed & GPU/Parallel Decimated: " << (i + 1) << " / " << header.vertex_count 
                       << " (" << std::fixed << std::setprecision(1) << progress_pct << "%), "
-                      << "Decimated: " << points.size() << " points\n";
+                      << "Retained: " << points.size() << " points\n";
         }
     }
     
