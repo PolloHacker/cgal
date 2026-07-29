@@ -78,25 +78,7 @@ struct PlyHeader {
     int idx_intensity = -1;
 };
 
-struct VoxelKey {
-    int64_t x, y, z;
-    bool operator==(const VoxelKey& other) const {
-        return x == other.x && y == other.y && z == other.z;
-    }
-};
 
-struct VoxelKeyHash {
-    std::size_t operator()(const VoxelKey& k) const {
-        std::size_t h = 0;
-        auto hash_combine = [&h](uint64_t val) {
-            h ^= std::hash<uint64_t>{}(val) + 0x9e3779b9 + (h << 6) + (h >> 2);
-        };
-        hash_combine(static_cast<uint64_t>(k.x));
-        hash_combine(static_cast<uint64_t>(k.y));
-        hash_combine(static_cast<uint64_t>(k.z));
-        return h;
-    }
-};
 
 /**
  * \brief Safe line-reading to handle both Windows (\r\n) and Linux (\n) newlines.
