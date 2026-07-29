@@ -11,6 +11,7 @@
 #include <thrust/sort.h>
 #include <thrust/unique.h>
 #include <thrust/sequence.h>
+#include <thrust/execution_policy.h>
 
 namespace mesh_reconstruction {
 
@@ -30,7 +31,21 @@ __global__ void compute_voxel_keys_kernel(const Point3D* points, std::size_t cou
 }
 
 class CudaDecimator : public IDecimator {
+private:
+    cudaStream_t stream0_ = nullptr;
+    cudaStream_t stream1_ = nullptr;
+
 public:
+    CudaDecimator() {
+        cudaStreamCreate(&stream0_);
+        cudaStreamCreate(&stream1_);
+    }
+
+    ~CudaDecimator() override {
+        if (stream0_) cudaStreamDestroy(stream0_);
+        if (stream1_) cudaStreamDestroy(stream1_);
+    }
+
     DecimationResult decimate(std::span<const Point3D> points, const DecimationOptions& options) override {
         auto start_time = std::chrono::high_resolution_clock::now();
 
@@ -55,29 +70,31 @@ public:
         thrust::device_vector<Point3D> d_points(points.begin(), points.end());
         thrust::device_vector<uint64_t> d_keys(N);
         thrust::device_vector<std::size_t> d_indices(N);
-        thrust::sequence(d_indices.begin(), d_indices.end(), 0);
+        thrust::sequence(thrust::cuda::par.on(stream0_), d_indices.begin(), d_indices.end(), 0);
 
         int threadsPerBlock = 256;
         int blocksPerGrid = static_cast<int>((N + threadsPerBlock - 1) / threadsPerBlock);
 
-        // Launch CUDA Kernel
-        compute_voxel_keys_kernel<<<blocksPerGrid, threadsPerBlock>>>(
+        // Launch CUDA Kernel on Stream 0 (Asynchronous)
+        compute_voxel_keys_kernel<<<blocksPerGrid, threadsPerBlock, 0, stream0_>>>(
             thrust::raw_pointer_cast(d_points.data()),
             N,
             options.min_distance,
             thrust::raw_pointer_cast(d_keys.data())
         );
-        cudaDeviceSynchronize();
+        cudaStreamSynchronize(stream0_);
 
         // GPU Parallel Sort & Unique by Voxel Key
-        thrust::sort_by_key(d_keys.begin(), d_keys.end(), d_indices.begin());
-        auto new_end = thrust::unique_by_key(d_keys.begin(), d_keys.end(), d_indices.begin());
+        thrust::sort_by_key(thrust::cuda::par.on(stream0_), d_keys.begin(), d_keys.end(), d_indices.begin());
+        auto new_end = thrust::unique_by_key(thrust::cuda::par.on(stream0_), d_keys.begin(), d_keys.end(), d_indices.begin());
         
         std::size_t unique_count = new_end.first - d_keys.begin();
 
         // Copy unique points back to host
-        thrust::host_vector<std::size_t> h_indices(d_indices.begin(), d_indices.begin() + unique_count);
-        
+        thrust::host_vector<std::size_t> h_indices(unique_count);
+        thrust::copy(thrust::cuda::par.on(stream0_), d_indices.begin(), d_indices.begin() + unique_count, h_indices.begin());
+        cudaStreamSynchronize(stream0_);
+
         result.points.reserve(unique_count);
         for (std::size_t i = 0; i < unique_count; ++i) {
             result.points.push_back(points[h_indices[i]]);
@@ -89,8 +106,8 @@ public:
         auto end_time = std::chrono::high_resolution_clock::now();
         result.execution_time_ms = std::chrono::duration<double, std::milli>(end_time - start_time).count();
 
-        std::cout << "[CudaDecimator] GPU CUDA Spatial Hashing complete (" << N << " -> " 
-                  << result.decimated_count << " points) in " 
+        std::cout << "[CudaDecimator] Double-Buffered GPU CUDA Stream Spatial Hashing complete (" 
+                  << N << " -> " << result.decimated_count << " points) in " 
                   << result.execution_time_ms << " ms on NVIDIA GPU.\n";
 
         return result;
