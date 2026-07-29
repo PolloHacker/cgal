@@ -36,6 +36,13 @@ struct VoxelKey {
         };
     }
 
+    [[nodiscard]] constexpr uint64_t pack() const noexcept {
+        const uint64_t ux = static_cast<uint64_t>(ix + 0x100000) & 0x1FFFFFULL;
+        const uint64_t uy = static_cast<uint64_t>(iy + 0x100000) & 0x1FFFFFULL;
+        const uint64_t uz = static_cast<uint64_t>(iz + 0x100000) & 0x1FFFFFULL;
+        return (ux << 42) | (uy << 21) | uz;
+    }
+
     [[nodiscard]] uint64_t hash() const noexcept {
         return (static_cast<uint64_t>(ix) * 73856093ULL) ^
                (static_cast<uint64_t>(iy) * 19349663ULL) ^

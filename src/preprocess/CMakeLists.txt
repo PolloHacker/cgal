@@ -98,7 +98,7 @@ add_library(preprocess_core STATIC
   src/skeleton_extraction.cpp
   src/parallel_decimator.cpp
   src/tbb_cpu_decimator.cpp
-  src/chunked_streamer.cpp
+  src/mmap_ply_reader.cpp
   src/cuda_decimator.cu
 )
 

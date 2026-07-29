@@ -15,8 +15,10 @@
 #include <iomanip>
 
 #include <tbb/concurrent_unordered_set.h>
+#include <tbb/parallel_for.h>
 #include <CGAL/Point_set_3/IO.h>
 #include "parallel_decimator.h"
+#include "mmap_ply_reader.h"
 
 namespace mesh_reconstruction {
 
@@ -356,6 +358,115 @@ bool load_spatial_subsampled_ply(const std::string &filepath,
     auto decimator = create_decimator(dec_opts);
 
     std::unordered_set<VoxelKey, VoxelKeyHash> voxel_grid;
+
+    // Fast path: Memory-mapped binary PLY parser with TBB parallel parsing
+    if (header.format == PlyHeader::Format::BINARY_LE) {
+        try {
+            std::size_t header_offset = static_cast<std::size_t>(file.tellg());
+            file.close();
+
+            MmapReader reader(filepath, header_offset);
+            const char* base_ptr = reader.record_data();
+            std::size_t total_points = header.vertex_count;
+            std::size_t record_size = header.vertex_byte_size;
+
+            const std::size_t CHUNK_SIZE = 10000000;
+            std::size_t offset = 0;
+
+            while (offset < total_points) {
+                std::size_t chunk_count = std::min(CHUNK_SIZE, total_points - offset);
+                std::vector<Point3D> chunk_points(chunk_count);
+
+                tbb::parallel_for(tbb::blocked_range<std::size_t>(0, chunk_count, 50000),
+                    [&](const tbb::blocked_range<std::size_t>& range) {
+                        for (std::size_t i = range.begin(); i < range.end(); ++i) {
+                            std::size_t global_idx = offset + i;
+                            const char* rec = base_ptr + global_idx * record_size;
+
+                            double x = read_binary_value(rec + header.vertex_properties[header.idx_x].offset, header.vertex_properties[header.idx_x].type);
+                            double y = read_binary_value(rec + header.vertex_properties[header.idx_y].offset, header.vertex_properties[header.idx_y].type);
+                            double z = read_binary_value(rec + header.vertex_properties[header.idx_z].offset, header.vertex_properties[header.idx_z].type);
+
+                            // NaN / Inf filtering (FR-8)
+                            if (std::isnan(x) || std::isnan(y) || std::isnan(z) || std::isinf(x) || std::isinf(y) || std::isinf(z)) {
+                                continue;
+                            }
+
+                            Point3D pt;
+                            pt.x = x; pt.y = y; pt.z = z;
+
+                            if (has_normals) {
+                                pt.nx = read_binary_value(rec + header.vertex_properties[header.idx_nx].offset, header.vertex_properties[header.idx_nx].type);
+                                pt.ny = read_binary_value(rec + header.vertex_properties[header.idx_ny].offset, header.vertex_properties[header.idx_ny].type);
+                                pt.nz = read_binary_value(rec + header.vertex_properties[header.idx_nz].offset, header.vertex_properties[header.idx_nz].type);
+                            }
+                            if (has_colors) {
+                                double r = read_binary_value(rec + header.vertex_properties[header.idx_red].offset, header.vertex_properties[header.idx_red].type);
+                                double g = read_binary_value(rec + header.vertex_properties[header.idx_green].offset, header.vertex_properties[header.idx_green].type);
+                                double b = read_binary_value(rec + header.vertex_properties[header.idx_blue].offset, header.vertex_properties[header.idx_blue].type);
+                                pt.r = to_uchar(r, header.vertex_properties[header.idx_red].type);
+                                pt.g = to_uchar(g, header.vertex_properties[header.idx_green].type);
+                                pt.b = to_uchar(b, header.vertex_properties[header.idx_blue].type);
+                            }
+                            if (has_intensity) {
+                                double intensity = read_binary_value(rec + header.vertex_properties[header.idx_intensity].offset, header.vertex_properties[header.idx_intensity].type);
+                                pt.intensity = static_cast<float>(intensity);
+                            }
+                            chunk_points[i] = pt;
+                        }
+                    }
+                );
+
+                DecimationResult res = decimator->decimate(chunk_points, dec_opts);
+                for (const auto& p : res.points) {
+                    VoxelKey key = VoxelKey::from_point(p, min_distance);
+                    if (voxel_grid.insert(key).second) {
+                        Point_set::Index idx = *(points.insert(Point(p.x, p.y, p.z)));
+                        if (has_normals) {
+                            points.normal(idx) = Vector(p.nx, p.ny, p.nz);
+                        }
+                        if (has_colors) {
+                            red_map[idx] = p.r;
+                            green_map[idx] = p.g;
+                            blue_map[idx] = p.b;
+                        }
+                        if (has_intensity) {
+                            if (intensity_is_double) {
+                                intensity_map_double[idx] = static_cast<double>(p.intensity);
+                            } else {
+                                intensity_map_float[idx] = p.intensity;
+                            }
+                        }
+                    }
+                }
+
+                offset += chunk_count;
+                double progress_pct = 100.0 * offset / total_points;
+                std::cout << "Parsed & GPU/Parallel Decimated: " << offset << " / " << total_points 
+                          << " (" << std::fixed << std::setprecision(1) << progress_pct << "%), "
+                          << "Retained: " << points.size() << " points\n";
+            }
+
+            reader.close();
+
+            std::size_t decimated_count = points.size();
+            double reduction_pct = 100.0 * (1.0 - (double)decimated_count / total_points);
+
+            std::cout << "--------------------------------------------------\n";
+            std::cout << "Streaming Phase Completed:\n";
+            std::cout << "  Decimated Point Count: " << decimated_count << " / " << total_points << "\n";
+            std::cout << "  Reduction Percentage:  " << std::fixed << std::setprecision(2) << reduction_pct << "%\n";
+            std::cout << "--------------------------------------------------\n";
+
+            points.collect_garbage();
+            return true;
+        } catch (const std::exception& e) {
+            std::cerr << "MmapReader notice: " << e.what() << ". Falling back to stream reader.\n";
+            file.open(filepath, std::ios::binary);
+        }
+    }
+
+    // Fallback path: Sequential stream loader (ASCII or non-mmapped binary)
     std::vector<Point3D> chunk_buffer;
     chunk_buffer.reserve(10000000);
 
@@ -415,12 +526,17 @@ bool load_spatial_subsampled_ply(const std::string &filepath,
             }
         }
 
+        // NaN / Inf filtering
+        if (std::isnan(x) || std::isnan(y) || std::isnan(z) || std::isinf(x) || std::isinf(y) || std::isinf(z)) {
+            continue;
+        }
+
         Point3D pt;
         pt.x = x; pt.y = y; pt.z = z;
         pt.nx = nx; pt.ny = ny; pt.nz = nz;
-        pt.r = static_cast<uint8_t>(r);
-        pt.g = static_cast<uint8_t>(g);
-        pt.b = static_cast<uint8_t>(b);
+        pt.r = to_uchar(r, header.vertex_properties[header.idx_red].type);
+        pt.g = to_uchar(g, header.vertex_properties[header.idx_green].type);
+        pt.b = to_uchar(b, header.vertex_properties[header.idx_blue].type);
         pt.intensity = static_cast<float>(intensity);
         chunk_buffer.push_back(pt);
 
@@ -434,9 +550,9 @@ bool load_spatial_subsampled_ply(const std::string &filepath,
                         points.normal(idx) = Vector(p.nx, p.ny, p.nz);
                     }
                     if (has_colors) {
-                        red_map[idx] = to_uchar(p.r, header.vertex_properties[header.idx_red].type);
-                        green_map[idx] = to_uchar(p.g, header.vertex_properties[header.idx_green].type);
-                        blue_map[idx] = to_uchar(p.b, header.vertex_properties[header.idx_blue].type);
+                        red_map[idx] = p.r;
+                        green_map[idx] = p.g;
+                        blue_map[idx] = p.b;
                     }
                     if (has_intensity) {
                         if (intensity_is_double) {

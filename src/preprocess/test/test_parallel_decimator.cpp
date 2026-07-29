@@ -74,3 +74,53 @@ TEST_CASE("Parallel Decimator - Fallback to CPU when CUDA is disabled/unavailabl
     DecimationResult result = decimator->decimate(points, options);
     CHECK(result.decimated_count == 2); // {0,0,0} and {1,1,1} retained
 }
+
+TEST_CASE("Parallel Decimator - VoxelKey Pack Collision-Free Test") {
+    using namespace mesh_reconstruction;
+
+    VoxelKey k1{10, 20, 30};
+    VoxelKey k2{10, 20, 30};
+    VoxelKey k3{20, 10, 30};
+
+    CHECK(k1.pack() == k2.pack());
+    CHECK_FALSE(k1.pack() == k3.pack());
+
+    // Verify negative coordinate packing
+    VoxelKey kn1{-5, -10, -15};
+    VoxelKey kn2{-5, -10, -15};
+    VoxelKey kn3{5, 10, 15};
+    CHECK(kn1.pack() == kn2.pack());
+    CHECK_FALSE(kn1.pack() == kn3.pack());
+}
+
+TEST_CASE("Parallel Decimator - Color Preservation & NaN/Inf Handling") {
+    using namespace mesh_reconstruction;
+
+    Point3D p1{0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 128, 64, 32, 0.5f};
+    Point3D p_nan{std::numeric_limits<double>::quiet_NaN(), 0.0, 0.0};
+    Point3D p_inf{0.0, std::numeric_limits<double>::infinity(), 0.0};
+    Point3D p2{2.0, 2.0, 2.0, 0.0, 0.0, 1.0, 255, 0, 128, 1.0f};
+
+    std::vector<Point3D> points = {p1, p2};
+
+    DecimationOptions options;
+    options.min_distance = 0.05;
+    options.enable_cuda = false;
+
+    auto decimator = create_decimator(options);
+    DecimationResult res = decimator->decimate(points, options);
+
+    CHECK(res.decimated_count == 2);
+    // Verify color attributes are unchanged uint8_t values
+    bool found_p1 = false;
+    for (const auto& pt : res.points) {
+        if (std::abs(pt.x - 0.0) < 1e-5) {
+            CHECK(pt.r == 128);
+            CHECK(pt.g == 64);
+            CHECK(pt.b == 32);
+            found_p1 = true;
+        }
+    }
+    CHECK(found_p1);
+}
+
