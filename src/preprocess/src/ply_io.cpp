@@ -376,8 +376,16 @@ bool load_spatial_subsampled_ply(const std::string &filepath,
             tbb::enumerable_thread_specific<std::unordered_set<uint64_t>> local_grids;
             tbb::enumerable_thread_specific<std::vector<Point3D>> local_retained;
 
-            const double inv = 1.0 / min_distance;
             const std::size_t GRAIN_SIZE = 250000;
+            const double inv = 1.0 / min_distance;
+            const std::size_t off_x = header.vertex_properties[header.idx_x].offset;
+            const std::size_t off_y = header.vertex_properties[header.idx_y].offset;
+            const std::size_t off_z = header.vertex_properties[header.idx_z].offset;
+            const PlyType type_x = header.vertex_properties[header.idx_x].type;
+            const PlyType type_y = header.vertex_properties[header.idx_y].type;
+            const PlyType type_z = header.vertex_properties[header.idx_z].type;
+            const bool is_float32_coords = (type_x == PlyType::FLOAT32 && type_y == PlyType::FLOAT32 && type_z == PlyType::FLOAT32);
+            const bool is_float64_coords = (type_x == PlyType::FLOAT64 && type_y == PlyType::FLOAT64 && type_z == PlyType::FLOAT64);
 
             std::cout << "[MmapStreamer] Streaming " << total_points << " points in parallel on-the-fly (lockless thread-local)...\n";
 
@@ -389,9 +397,22 @@ bool load_spatial_subsampled_ply(const std::string &filepath,
                     for (std::size_t i = range.begin(); i < range.end(); ++i) {
                         const char* rec = base_ptr + i * record_size;
 
-                        double x = read_binary_value(rec + header.vertex_properties[header.idx_x].offset, header.vertex_properties[header.idx_x].type);
-                        double y = read_binary_value(rec + header.vertex_properties[header.idx_y].offset, header.vertex_properties[header.idx_y].type);
-                        double z = read_binary_value(rec + header.vertex_properties[header.idx_z].offset, header.vertex_properties[header.idx_z].type);
+                        double x = 0.0, y = 0.0, z = 0.0;
+                        if (is_float32_coords) {
+                            float fx, fy, fz;
+                            std::memcpy(&fx, rec + off_x, 4);
+                            std::memcpy(&fy, rec + off_y, 4);
+                            std::memcpy(&fz, rec + off_z, 4);
+                            x = fx; y = fy; z = fz;
+                        } else if (is_float64_coords) {
+                            std::memcpy(&x, rec + off_x, 8);
+                            std::memcpy(&y, rec + off_y, 8);
+                            std::memcpy(&z, rec + off_z, 8);
+                        } else {
+                            x = read_binary_value(rec + off_x, type_x);
+                            y = read_binary_value(rec + off_y, type_y);
+                            z = read_binary_value(rec + off_z, type_z);
+                        }
 
                         // NaN / Inf filtering (FR-8)
                         if (std::isnan(x) || std::isnan(y) || std::isnan(z) || std::isinf(x) || std::isinf(y) || std::isinf(z)) {
