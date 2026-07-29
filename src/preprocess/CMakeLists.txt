@@ -96,6 +96,10 @@ add_library(preprocess_core STATIC
   src/mesh_reconstruction.cpp
   src/validation.cpp
   src/skeleton_extraction.cpp
+  src/parallel_decimator.cpp
+  src/tbb_cpu_decimator.cpp
+  src/chunked_streamer.cpp
+  src/cuda_decimator.cu
 )
 
 target_include_directories(preprocess_core PUBLIC include)
@@ -130,6 +134,7 @@ add_executable(tests
   test/test_point_cloud_processing.cpp
   test/test_mesh_reconstruction.cpp
   test/test_skeletonization.cpp
+  test/test_parallel_decimator.cpp
 )
 target_link_libraries(tests PRIVATE preprocess_core)
 
@@ -141,3 +146,4 @@ target_include_directories(skeletonization PRIVATE
   ${CMAKE_SOURCE_DIR}/src/wnnc/cpp/third_party/CLI11
 )
 target_link_libraries(skeletonization PRIVATE preprocess_core)
+

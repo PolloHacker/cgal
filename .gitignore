@@ -10,3 +10,6 @@ testing/
 
 .vscode/
 .venv/
+.agents/
+.specify/
+specs/

@@ -14,6 +14,7 @@
 #include <limits>
 #include <iomanip>
 
+#include <tbb/concurrent_unordered_set.h>
 #include <CGAL/Point_set_3/IO.h>
 
 namespace mesh_reconstruction {
@@ -366,7 +367,7 @@ bool load_spatial_subsampled_ply(const std::string &filepath,
         }
     }
     
-    std::unordered_set<VoxelKey, VoxelKeyHash> voxel_grid;
+    tbb::concurrent_unordered_set<VoxelKey, VoxelKeyHash> voxel_grid;
     
     std::vector<char> record_buf(header.vertex_byte_size);
     std::string ascii_line;

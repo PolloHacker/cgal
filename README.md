@@ -31,6 +31,8 @@ graph TD
 * **`AdaptiveSolvers/`**: Repositório integrado para reconstrução de superfície via Screened Poisson (Kazhdan).
 * **`main.py`**: Ponto de entrada que gerencia e executa todas as etapas do pipeline.
 * **`heuristic.md`**: Explicação matemática detalhada por trás das heurísticas de ajuste de parâmetros da reconstrução de Poisson.
+* **`docs/out-of-core-parallel-decimation.md`**: Arquitetura e guia de decimação paralela out-of-core (CUDA / TBB).
+* **`.specify/memory/constitution.md`**: Constituição e princípios de engenharia de software do projeto.
 
 ---
 
