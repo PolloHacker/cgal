@@ -67,7 +67,7 @@ bool decimate_point_set(Point_set& point_set, double min_distance, bool enable_c
         decimated_set.add_normal_map();
     }
     for (const auto& pt : result.points) {
-        auto idx = decimated_set.insert(Point(pt.x, pt.y, pt.z));
+        Point_set::Index idx = *(decimated_set.insert(Point(pt.x, pt.y, pt.z)));
         if (point_set.has_normal_map()) {
             decimated_set.normal(idx) = Vector(pt.nx, pt.ny, pt.nz);
         }
