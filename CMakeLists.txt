@@ -16,9 +16,9 @@ find_package(CGAL CONFIG REQUIRED)
 find_package(Eigen3 CONFIG REQUIRED)
 find_package(TBB REQUIRED)
 
-option(WNNC_USE_CUDA "Use CUDA acceleration for WNNC solver" ON)
+option(USE_CUDA "Use CUDA acceleration for WNNC solver and Parallel Decimator" ON)
 
-if(WNNC_USE_CUDA)
+if(USE_CUDA)
   include(CheckLanguage)
   check_language(CUDA)
   if(CMAKE_CUDA_COMPILER)
@@ -29,7 +29,7 @@ if(WNNC_USE_CUDA)
     message(STATUS "CUDA compilation enabled.")
   else()
     message(STATUS "CUDA compiler not found. Falling back to CPU-only build.")
-    set(WNNC_USE_CUDA OFF)
+    set(USE_CUDA OFF)
   endif()
 endif()
 
@@ -44,7 +44,7 @@ set(WNNC_CORE_INCLUDES
   src/wnnc/python/ext/wn_treecode/wn_treecode_cpu
 )
 
-if(WNNC_USE_CUDA)
+if(USE_CUDA)
   list(APPEND WNNC_CORE_SOURCES
     src/wnnc/python/ext/wn_treecode/wn_treecode_cuda/wn_treecode_cuda_kernels.cu
     src/pipeline/winding_number_operator_cuda.cu
@@ -68,9 +68,9 @@ target_link_libraries(wnnc_core PUBLIC
   OpenMP::OpenMP_CXX
 )
 
-if(WNNC_USE_CUDA)
+if(USE_CUDA)
   target_link_libraries(wnnc_core PUBLIC CUDA::cudart)
-  target_compile_definitions(wnnc_core PUBLIC WNNC_USE_CUDA)
+  target_compile_definitions(wnnc_core PUBLIC WNNC_USE_CUDA USE_CUDA)
 endif()
 
 if(NOT MSVC)

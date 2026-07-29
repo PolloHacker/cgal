@@ -110,10 +110,13 @@ target_link_libraries(preprocess_core PUBLIC
   TBB::tbb
 )
 
-target_compile_definitions(preprocess_core PUBLIC
-  CGAL_EIGEN3_ENABLED 
-  CGAL_LINKED_WITH_TBB 
-)
+if(USE_CUDA)
+  set_source_files_properties(src/cuda_decimator.cu PROPERTIES LANGUAGE CUDA)
+  target_compile_definitions(preprocess_core PUBLIC USE_CUDA)
+  target_link_libraries(preprocess_core PUBLIC CUDA::cudart)
+else()
+  set_source_files_properties(src/cuda_decimator.cu PROPERTIES LANGUAGE CXX)
+endif()
 
 if(TARGET CGAL::Eigen3_support)
   target_link_libraries(preprocess_core PUBLIC CGAL::Eigen3_support)
