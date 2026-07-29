@@ -7,7 +7,7 @@
 #include <span>
 #include <string>
 
-#include <CGAL/Point_set_3.h>
+#include "mesh_reconstruction.h"
 
 namespace mesh_reconstruction {
 
