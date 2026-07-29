@@ -45,7 +45,7 @@ bool smooth_points(Point_set &points, const int requested_neighbors) {
     return false;
   }
 
-  CGAL::jet_smooth_point_set<CGAL::Parallel_tag>(points, neighbors);
+  CGAL::jet_smooth_point_set<mesh_reconstruction::Concurrency_tag>(points, neighbors);
 
   std::cout << "Smoothing neighbors: " << neighbors << "\n";
   return validate_point_set(points, "post-smoothing point set", false);
@@ -77,7 +77,7 @@ bool apply_wlop_downsampling(Point_set &points,
           : options.wlop_neighbor_radius *
                 compute_average_spacing(points, options.outlier_neighbors);
 
-  CGAL::wlop_simplify_and_regularize_point_set<CGAL::Parallel_tag>(
+  CGAL::wlop_simplify_and_regularize_point_set<mesh_reconstruction::Concurrency_tag>(
       points, std::back_inserter(downsampled_points),
       CGAL::parameters::point_map(points.point_map())
           .select_percentage(options.wlop_retain_percent)
@@ -152,7 +152,7 @@ bool preprocess_points(Point_set &points, const Pipeline_options &options,
     log_stage("1.2 Outlier removal");
     average_spacing = compute_average_spacing(points, options.outlier_neighbors);
 
-    auto rout_it = CGAL::remove_outliers<CGAL::Parallel_tag>(
+    auto rout_it = CGAL::remove_outliers<mesh_reconstruction::Concurrency_tag>(
         points, 
         options.outlier_neighbors, 
         points.parameters().threshold_percent(options.outlier_percent)
