@@ -313,7 +313,8 @@ bool parse_ply_header(const std::string& filepath, PlyHeader& header, std::ifstr
  */
 bool load_spatial_subsampled_ply(const std::string &filepath,
                                  Point_set &points,
-                                 double min_distance) {
+                                 double min_distance,
+                                 bool enable_cuda = true) {
     PlyHeader header;
     std::ifstream file;
     if (!parse_ply_header(filepath, header, file)) {
@@ -354,7 +355,7 @@ bool load_spatial_subsampled_ply(const std::string &filepath,
     
     DecimationOptions dec_opts;
     dec_opts.min_distance = min_distance;
-    dec_opts.enable_cuda = true;
+    dec_opts.enable_cuda = enable_cuda;
     auto decimator = create_decimator(dec_opts);
 
     std::unordered_set<VoxelKey, VoxelKeyHash> voxel_grid;
@@ -591,9 +592,10 @@ bool load_spatial_subsampled_ply(const std::string &filepath,
 bool load_ply(const std::string &filepath,
               Point_set &points,
               bool enable_spatial_subsampling,
-              double min_distance) {
+              double min_distance,
+              bool enable_cuda) {
     if (enable_spatial_subsampling) {
-        return load_spatial_subsampled_ply(filepath, points, min_distance);
+        return load_spatial_subsampled_ply(filepath, points, min_distance, enable_cuda);
     }
     
     // Normal loader delegates to CGAL native IO

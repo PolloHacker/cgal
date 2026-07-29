@@ -170,9 +170,11 @@ int main(int argc, char* argv[]) {
     app.add_option("output_dir", output_root, "Output root directory")->capture_default_str();
 
     // Preprocessor CLI options
+    bool disable_cuda = false;
     auto prep_group = app.add_option_group("Preprocessor Options");
     prep_group->add_flag("--enable-spatial-subsampling", prep_opts.enable_spatial_subsampling, "Enable spatial subsampling");
     prep_group->add_option("--spatial-subsample-distance", prep_opts.spatial_subsample_distance, "Spatial subsampling distance")->capture_default_str();
+    prep_group->add_flag("--disable-cuda", disable_cuda, "Disable CUDA GPU decimation and force TBB CPU backend");
     prep_group->add_option("--remove-outliers-percent", prep_opts.outlier_percent, "Percentage threshold for outlier removal")->capture_default_str();
     prep_group->add_option("--outlier-neighbors", prep_opts.outlier_neighbors, "Number of neighbors for outlier checks")->capture_default_str();
     prep_group->add_flag("--enable-wlop", prep_opts.enable_wlop, "Enable WLOP downsampling");
@@ -231,6 +233,7 @@ int main(int argc, char* argv[]) {
 
     CLI11_PARSE(app, argc, argv);
 
+    prep_opts.enable_cuda = !disable_cuda;
     skeleton_opts.is_medially_centered = !no_medially_centered;
 
     // Apply width config logic for WNNC

@@ -19,7 +19,8 @@ namespace mesh_reconstruction {
 bool load_ply(const std::string &filepath,
               Point_set &points,
               bool enable_spatial_subsampling = false,
-              double min_distance = 0.1);
+              double min_distance = 0.1,
+              bool enable_cuda = true);
 
 /**
  * \brief Writes a CGAL Point_set_3 to a PLY file.

@@ -130,7 +130,7 @@ bool load_oriented_points(const std::string &input_path,
     log_stage("1. Load point cloud + normals (PLY)");
   }
   
-  if (!mesh_reconstruction::load_ply(input_path, points, options.enable_spatial_subsampling, options.spatial_subsample_distance)) {
+  if (!mesh_reconstruction::load_ply(input_path, points, options.enable_spatial_subsampling, options.spatial_subsample_distance, options.enable_cuda)) {
     return false;
   }
 
