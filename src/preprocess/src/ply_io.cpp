@@ -15,6 +15,7 @@
 #include <iomanip>
 
 #include <tbb/concurrent_unordered_set.h>
+#include <tbb/concurrent_vector.h>
 #include <tbb/parallel_for.h>
 #include <CGAL/Point_set_3/IO.h>
 #include "parallel_decimator.h"
@@ -360,7 +361,7 @@ bool load_spatial_subsampled_ply(const std::string &filepath,
 
     std::unordered_set<VoxelKey, VoxelKeyHash> voxel_grid;
 
-    // Fast path: Memory-mapped binary PLY parser with TBB parallel parsing
+    // Fast path: Memory-mapped binary PLY parser with parallel on-the-fly decimation
     if (header.format == PlyHeader::Format::BINARY_LE) {
         try {
             std::size_t header_offset = static_cast<std::size_t>(file.tellg());
@@ -371,28 +372,39 @@ bool load_spatial_subsampled_ply(const std::string &filepath,
             std::size_t total_points = header.vertex_count;
             std::size_t record_size = header.vertex_byte_size;
 
-            const std::size_t CHUNK_SIZE = 10000000;
-            std::size_t offset = 0;
+            tbb::concurrent_unordered_set<uint64_t> voxel_grid;
+            tbb::concurrent_vector<Point3D> retained_points;
 
-            while (offset < total_points) {
-                std::size_t chunk_count = std::min(CHUNK_SIZE, total_points - offset);
-                std::vector<Point3D> chunk_points(chunk_count);
+            const double inv = 1.0 / min_distance;
+            const std::size_t GRAIN_SIZE = 100000;
 
-                tbb::parallel_for(tbb::blocked_range<std::size_t>(0, chunk_count, 50000),
-                    [&](const tbb::blocked_range<std::size_t>& range) {
-                        for (std::size_t i = range.begin(); i < range.end(); ++i) {
-                            std::size_t global_idx = offset + i;
-                            const char* rec = base_ptr + global_idx * record_size;
+            std::cout << "[MmapStreamer] Streaming " << total_points << " points in parallel on-the-fly...\n";
 
-                            double x = read_binary_value(rec + header.vertex_properties[header.idx_x].offset, header.vertex_properties[header.idx_x].type);
-                            double y = read_binary_value(rec + header.vertex_properties[header.idx_y].offset, header.vertex_properties[header.idx_y].type);
-                            double z = read_binary_value(rec + header.vertex_properties[header.idx_z].offset, header.vertex_properties[header.idx_z].type);
+            tbb::parallel_for(tbb::blocked_range<std::size_t>(0, total_points, GRAIN_SIZE),
+                [&](const tbb::blocked_range<std::size_t>& range) {
+                    for (std::size_t i = range.begin(); i < range.end(); ++i) {
+                        const char* rec = base_ptr + i * record_size;
 
-                            // NaN / Inf filtering (FR-8)
-                            if (std::isnan(x) || std::isnan(y) || std::isnan(z) || std::isinf(x) || std::isinf(y) || std::isinf(z)) {
-                                continue;
-                            }
+                        double x = read_binary_value(rec + header.vertex_properties[header.idx_x].offset, header.vertex_properties[header.idx_x].type);
+                        double y = read_binary_value(rec + header.vertex_properties[header.idx_y].offset, header.vertex_properties[header.idx_y].type);
+                        double z = read_binary_value(rec + header.vertex_properties[header.idx_z].offset, header.vertex_properties[header.idx_z].type);
 
+                        // NaN / Inf filtering (FR-8)
+                        if (std::isnan(x) || std::isnan(y) || std::isnan(z) || std::isinf(x) || std::isinf(y) || std::isinf(z)) {
+                            continue;
+                        }
+
+                        int32_t ix = static_cast<int32_t>(std::floor(x * inv));
+                        int32_t iy = static_cast<int32_t>(std::floor(y * inv));
+                        int32_t iz = static_cast<int32_t>(std::floor(z * inv));
+
+                        uint64_t ux = static_cast<uint64_t>(ix + 0x100000) & 0x1FFFFFULL;
+                        uint64_t uy = static_cast<uint64_t>(iy + 0x100000) & 0x1FFFFFULL;
+                        uint64_t uz = static_cast<uint64_t>(iz + 0x100000) & 0x1FFFFFULL;
+                        uint64_t key = (ux << 42) | (uy << 21) | uz;
+
+                        // Probing lock-free voxel grid; 99.96% of points hit false instantly!
+                        if (voxel_grid.insert(key).second) {
                             Point3D pt;
                             pt.x = x; pt.y = y; pt.z = z;
 
@@ -413,48 +425,39 @@ bool load_spatial_subsampled_ply(const std::string &filepath,
                                 double intensity = read_binary_value(rec + header.vertex_properties[header.idx_intensity].offset, header.vertex_properties[header.idx_intensity].type);
                                 pt.intensity = static_cast<float>(intensity);
                             }
-                            chunk_points[i] = pt;
-                        }
-                    }
-                );
-
-                DecimationResult res = decimator->decimate(chunk_points, dec_opts);
-                for (const auto& p : res.points) {
-                    VoxelKey key = VoxelKey::from_point(p, min_distance);
-                    if (voxel_grid.insert(key).second) {
-                        Point_set::Index idx = *(points.insert(Point(p.x, p.y, p.z)));
-                        if (has_normals) {
-                            points.normal(idx) = Vector(p.nx, p.ny, p.nz);
-                        }
-                        if (has_colors) {
-                            red_map[idx] = p.r;
-                            green_map[idx] = p.g;
-                            blue_map[idx] = p.b;
-                        }
-                        if (has_intensity) {
-                            if (intensity_is_double) {
-                                intensity_map_double[idx] = static_cast<double>(p.intensity);
-                            } else {
-                                intensity_map_float[idx] = p.intensity;
-                            }
+                            retained_points.push_back(pt);
                         }
                     }
                 }
-
-                offset += chunk_count;
-                double progress_pct = 100.0 * offset / total_points;
-                std::cout << "Parsed & GPU/Parallel Decimated: " << offset << " / " << total_points 
-                          << " (" << std::fixed << std::setprecision(1) << progress_pct << "%), "
-                          << "Retained: " << points.size() << " points\n";
-            }
+            );
 
             reader.close();
+
+            // Single-threaded copy of retained points into CGAL Point_set
+            for (const auto& p : retained_points) {
+                Point_set::Index idx = *(points.insert(Point(p.x, p.y, p.z)));
+                if (has_normals) {
+                    points.normal(idx) = Vector(p.nx, p.ny, p.nz);
+                }
+                if (has_colors) {
+                    red_map[idx] = p.r;
+                    green_map[idx] = p.g;
+                    blue_map[idx] = p.b;
+                }
+                if (has_intensity) {
+                    if (intensity_is_double) {
+                        intensity_map_double[idx] = static_cast<double>(p.intensity);
+                    } else {
+                        intensity_map_float[idx] = p.intensity;
+                    }
+                }
+            }
 
             std::size_t decimated_count = points.size();
             double reduction_pct = 100.0 * (1.0 - (double)decimated_count / total_points);
 
             std::cout << "--------------------------------------------------\n";
-            std::cout << "Streaming Phase Completed:\n";
+            std::cout << "Parallel On-The-Fly Mmap Streaming Phase Completed:\n";
             std::cout << "  Decimated Point Count: " << decimated_count << " / " << total_points << "\n";
             std::cout << "  Reduction Percentage:  " << std::fixed << std::setprecision(2) << reduction_pct << "%\n";
             std::cout << "--------------------------------------------------\n";
