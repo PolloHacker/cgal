@@ -18,16 +18,3 @@ struct Output_paths {
   std::filesystem::path raw_points;
   std::filesystem::path preprocessed_points;
 };
-
-/** \brief Prints command-line usage for the executable. */
-void print_usage(const char *exe_name);
-
-/** \brief Parses command-line options into a pipeline options struct. */
-bool parse_args(int argc, char *argv[], Pipeline_options &options);
-
-/** \brief Creates the output directory when it does not already exist. */
-bool prepare_output_dir(const std::filesystem::path &out_dir);
-
-/** \brief Builds all output artifact paths from the input stem and output
- * directory. */
-Output_paths make_output_paths(const Pipeline_options &options);

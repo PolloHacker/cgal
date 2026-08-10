@@ -44,7 +44,6 @@ target_include_directories(adaptive_solvers INTERFACE src/AdaptiveSolvers/Src)
 # preprocess_core — CGAL preprocessing, decimation, skeleton extraction
 # ─────────────────────────────────────────────────────────────────────────────
 add_library(preprocess_core STATIC
-  src/preprocess/src/pipeline_config.cpp
   src/preprocess/src/point_cloud_processing.cpp
   src/preprocess/src/ply_io.cpp
   src/preprocess/src/attribute_transfer.cpp
@@ -84,6 +83,23 @@ if(TARGET CGAL::Eigen3_support)
 endif()
 
 # ─────────────────────────────────────────────────────────────────────────────
+# poisson_core — Screened Poisson surface reconstruction & trimming wrapper
+# ─────────────────────────────────────────────────────────────────────────────
+add_library(poisson_core STATIC
+  src/poisson/src/poisson_recon_wrapper.cpp
+)
+
+target_include_directories(poisson_core PUBLIC
+  src/poisson/include
+)
+
+target_link_libraries(poisson_core PUBLIC
+  adaptive_solvers
+)
+
+target_compile_definitions(poisson_core PUBLIC USE_DOUBLE)
+
+# ─────────────────────────────────────────────────────────────────────────────
 # wnnc_core — winding number normal estimation (CPU or CUDA)
 # ─────────────────────────────────────────────────────────────────────────────
 set(WNNC_CORE_SOURCES
@@ -94,12 +110,13 @@ set(WNNC_CORE_SOURCES
 set(WNNC_CORE_INCLUDES
   src/wnnc/cpp/src
   src/wnnc/python/ext/wn_treecode/wn_treecode_cpu
+  src/poisson/include
 )
 
 if(USE_CUDA)
   list(APPEND WNNC_CORE_SOURCES
     src/wnnc/python/ext/wn_treecode/wn_treecode_cuda/wn_treecode_cuda_kernels.cu
-    src/pipeline/winding_number_operator_cuda.cu
+    src/poisson/src/winding_number_operator_cuda.cu
   )
   list(APPEND WNNC_CORE_INCLUDES
     src/wnnc/python/ext/wn_treecode/wn_treecode_cuda
@@ -107,7 +124,7 @@ if(USE_CUDA)
 else()
   list(APPEND WNNC_CORE_SOURCES
     src/wnnc/python/ext/wn_treecode/wn_treecode_cpu/wn_treecode_cpu_kernels.cpp
-    src/pipeline/winding_number_operator_cpu.cpp
+    src/poisson/src/winding_number_operator_cpu.cpp
   )
 endif()
 
@@ -137,17 +154,18 @@ endif()
 # pipeline — main unified executable
 # ─────────────────────────────────────────────────────────────────────────────
 add_executable(pipeline
-  src/pipeline/pipeline_main.cpp
-  src/pipeline/poisson_recon_wrapper.cpp
+  src/pipeline_main.cpp
 )
 
 target_include_directories(pipeline PRIVATE
   src/wnnc/cpp/third_party/CLI11
+  src/poisson/include
 )
 
 target_link_libraries(pipeline PRIVATE
   wnnc_core
   preprocess_core
+  poisson_core
   adaptive_solvers
 )
 
@@ -160,17 +178,18 @@ enable_testing()
 
 # Pipeline integration tests
 add_executable(pipeline_tests
-  src/pipeline/tests/pipeline_tests.cpp
-  src/pipeline/poisson_recon_wrapper.cpp
+  tests/pipeline_tests.cpp
 )
 
 target_include_directories(pipeline_tests PRIVATE
+  src/poisson/include
   src/pipeline
 )
 
 target_link_libraries(pipeline_tests PRIVATE
   wnnc_core
   preprocess_core
+  poisson_core
   adaptive_solvers
 )
 

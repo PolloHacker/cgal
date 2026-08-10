@@ -1,6 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest.h"
-#include "../poisson_recon_wrapper.h"
+#include "poisson_recon_wrapper.h"
 #include "wnnc/normal_solver.h"
 #include "wnnc/winding_number_operator.h"
 #include <cmath>
