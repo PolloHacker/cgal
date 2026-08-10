@@ -14,13 +14,4 @@ bool validate_point_set(const Point_set &points,
                         const char *context,
                         const bool require_oriented_normals);
 
-/** \brief Computes average spacing using k = neighbors (defaults to 6) */
-double compute_average_spacing(const Point_set &points, const int neighbors);
-
-/** \brief Computes average spacing using k = min(neighbors, max_neighbors).  */
-double compute_average_spacing(const Point_set &points, const int neighbors, const unsigned int max);
-
-/** \brief Validates spacing values used by Poisson reconstruction. */
-bool validate_average_spacing(const double average_spacing, const char *context);
-
 #endif

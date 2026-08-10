@@ -11,12 +11,7 @@ namespace fs = std::filesystem;
 void print_usage(const char *exe_name) {
   std::cerr
       << "Usage: " << exe_name
-      << " [input_ply] [output_dir] [--remove-outliers-percent=VALUE]"
-      << " [--outlier-neighbors=K]"
-      << " [--enable-smoothing] [--smoothing-neighbors=K]"
-      << " [--enable-wlop] [--wlop-retain-percent=VALUE]"
-      << " [--wlop-neighbor-radius=VALUE] [--wlop-iterations=N]"
-      << " [--wlop-require-uniform-sampling]"
+      << " [input_ply] [output_dir]"
       << " [--enable-spatial-subsampling]"
       << " [--spatial-subsample-distance=VALUE] [--min-distance=VALUE]\n";
 }
@@ -38,60 +33,7 @@ bool parse_args(const int argc, char *argv[], Pipeline_options &options) {
   for (int i = 3; i < argc; ++i) {
     const std::string arg = argv[i];
 
-    if (arg.rfind("--remove-outliers-percent=", 0) == 0) {
-      options.outlier_percent = std::stod(arg.substr(26));
-      if (options.outlier_percent < 0.0 || options.outlier_percent > 100.0) {
-        std::cerr << "Error: --remove-outliers-percent must be in [0, 100].\n";
-        return false;
-      }
-    } else if (arg.rfind("--outlier-neighbors=", 0) == 0) {
-      options.outlier_neighbors = std::stoi(arg.substr(20));
-      if (options.outlier_neighbors < 2) {
-        std::cerr << "Error: --outlier-neighbors must be >= 2.\n";
-        return false;
-      }
-    } else if (arg == "--enable-wlop") {
-      options.enable_wlop = true;
-    } else if (arg == "--enable-smoothing") {
-      options.enable_smoothing = true;
-    } else if (arg.rfind("--smoothing-neighbors=", 0) == 0) {
-      options.smoothing_neighbors =
-          std::stoi(arg.substr(std::string("--smoothing-neighbors=").size()));
-      options.enable_smoothing = true;
-      if (options.smoothing_neighbors < 2) {
-        std::cerr << "Error: --smoothing-neighbors must be >= 2.\n";
-        return false;
-      }
-    } else if (arg.rfind("--wlop-retain-percent=", 0) == 0) {
-      const std::string prefix = "--wlop-retain-percent=";
-      options.wlop_retain_percent = std::stod(arg.substr(prefix.size()));
-      options.enable_wlop = true;
-      if (options.wlop_retain_percent <= 0.0 ||
-          options.wlop_retain_percent > 100.0) {
-        std::cerr << "Error: --wlop-retain-percent must be in (0, 100].\n";
-        return false;
-      }
-    } else if (arg.rfind("--wlop-neighbor-radius=", 0) == 0) {
-      const std::string prefix = "--wlop-neighbor-radius=";
-      options.wlop_neighbor_radius = std::stod(arg.substr(prefix.size()));
-      options.enable_wlop = true;
-      if (!std::isfinite(options.wlop_neighbor_radius)) {
-        std::cerr << "Error: --wlop-neighbor-radius must be finite.\n";
-        return false;
-      }
-    } else if (arg.rfind("--wlop-iterations=", 0) == 0) {
-      const std::string prefix = "--wlop-iterations=";
-      const int iterations = std::stoi(arg.substr(prefix.size()));
-      options.enable_wlop = true;
-      if (iterations < 1) {
-        std::cerr << "Error: --wlop-iterations must be >= 1.\n";
-        return false;
-      }
-      options.wlop_iterations = static_cast<unsigned int>(iterations);
-    } else if (arg == "--wlop-require-uniform-sampling") {
-      options.wlop_require_uniform_sampling = true;
-      options.enable_wlop = true;
-    } else if (arg == "--enable-spatial-subsampling") {
+    if (arg == "--enable-spatial-subsampling") {
       options.enable_spatial_subsampling = true;
     } else if (arg.rfind("--spatial-subsample-distance=", 0) == 0) {
       const std::string prefix = "--spatial-subsample-distance=";

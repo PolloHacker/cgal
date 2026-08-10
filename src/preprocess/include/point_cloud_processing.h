@@ -11,9 +11,3 @@
 bool load_oriented_points(const std::string &input_path,
                           mesh_reconstruction::Point_set &points,
                           const Pipeline_options &options);
-
-/** \brief Applies optional point-cloud filtering and computes average spacing.
- */
-bool preprocess_points(mesh_reconstruction::Point_set &points,
-                       const Pipeline_options &options,
-                       double &average_spacing);

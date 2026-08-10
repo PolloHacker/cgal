@@ -19,11 +19,4 @@ TEST_CASE("Testing validation and spacing calculations") {
         bool ok = validate_point_set(points, "test context", true);
         CHECK(ok);
     }
-    
-    SUBCASE("Average spacing calculation") {
-        double spacing = compute_average_spacing(points, 2);
-        CHECK(spacing > 0.0);
-        bool spacing_ok = validate_average_spacing(spacing, "test spacing");
-        CHECK(spacing_ok);
-    }
 }

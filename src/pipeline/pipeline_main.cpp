@@ -30,13 +30,13 @@
 
 #include <CGAL/Surface_mesh_simplification/edge_collapse.h>
 #if __has_include(<CGAL/Surface_mesh_simplification/Policies/Edge_collapse/Edge_count_stop_predicate.h>)
-#include <CGAL/Surface_mesh_simplification/Policies/Edge_collapse/Edge_count_stop_predicate.h>
-using Stop_predicate = CGAL::Surface_mesh_simplification::Edge_count_stop_predicate<mesh_reconstruction::Triangle_mesh>;
+    #include <CGAL/Surface_mesh_simplification/Policies/Edge_collapse/Edge_count_stop_predicate.h>
+    using Stop_predicate = CGAL::Surface_mesh_simplification::Edge_count_stop_predicate<mesh_reconstruction::Triangle_mesh>;
 #elif __has_include(<CGAL/Surface_mesh_simplification/Policies/Edge_collapse/Count_stop_predicate.h>)
-#include <CGAL/Surface_mesh_simplification/Policies/Edge_collapse/Count_stop_predicate.h>
-using Stop_predicate = CGAL::Surface_mesh_simplification::Count_stop_predicate<mesh_reconstruction::Triangle_mesh>;
+    #include <CGAL/Surface_mesh_simplification/Policies/Edge_collapse/Count_stop_predicate.h>
+    using Stop_predicate = CGAL::Surface_mesh_simplification::Count_stop_predicate<mesh_reconstruction::Triangle_mesh>;
 #else
-#error "CGAL stop predicate header not found"
+    #error "CGAL stop predicate header not found"
 #endif
 
 namespace fs = std::filesystem;
@@ -175,15 +175,6 @@ int main(int argc, char* argv[]) {
     prep_group->add_flag("--enable-spatial-subsampling", prep_opts.enable_spatial_subsampling, "Enable spatial subsampling");
     prep_group->add_option("--spatial-subsample-distance", prep_opts.spatial_subsample_distance, "Spatial subsampling distance")->capture_default_str();
     prep_group->add_flag("--disable-cuda", disable_cuda, "Disable CUDA GPU decimation and force TBB CPU backend");
-    prep_group->add_option("--remove-outliers-percent", prep_opts.outlier_percent, "Percentage threshold for outlier removal")->capture_default_str();
-    prep_group->add_option("--outlier-neighbors", prep_opts.outlier_neighbors, "Number of neighbors for outlier checks")->capture_default_str();
-    prep_group->add_flag("--enable-wlop", prep_opts.enable_wlop, "Enable WLOP downsampling");
-    prep_group->add_option("--wlop-retain-percent", prep_opts.wlop_retain_percent, "Percentage of points to retain in WLOP")->capture_default_str();
-    prep_group->add_option("--wlop-neighbor-radius", prep_opts.wlop_neighbor_radius, "Neighbor radius for WLOP")->capture_default_str();
-    prep_group->add_option("--wlop-iterations", prep_opts.wlop_iterations, "Number of WLOP iterations")->capture_default_str();
-    prep_group->add_flag("--wlop-require-uniform-sampling", prep_opts.wlop_require_uniform_sampling, "Require uniform sampling in WLOP");
-    prep_group->add_flag("--enable-smoothing", prep_opts.enable_smoothing, "Enable jet smoothing");
-    prep_group->add_option("--smoothing-neighbors", prep_opts.smoothing_neighbors, "Number of neighbors for jet smoothing")->capture_default_str();
 
     // WNNC CLI options
     auto wnnc_group = app.add_option_group("WNNC Normal Estimation Options");
@@ -293,13 +284,6 @@ int main(int argc, char* argv[]) {
     auto points = std::make_shared<mesh_reconstruction::Point_set>();
     if (!load_oriented_points(input_path, *points, prep_opts)) {
         std::cerr << "Error during Stage 1 point cloud loading.\n";
-        wait_bg_tasks();
-        return EXIT_FAILURE;
-    }
-
-    double average_spacing = 0.0;
-    if (!preprocess_points(*points, prep_opts, average_spacing)) {
-        std::cerr << "Error during Stage 1 point cloud preprocessing.\n";
         wait_bg_tasks();
         return EXIT_FAILURE;
     }

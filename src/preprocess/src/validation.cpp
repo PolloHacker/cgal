@@ -46,25 +46,3 @@ bool validate_point_set(const Point_set &points, const char *context,
 
   return true;
 }
-
-double compute_average_spacing(const Point_set &points,
-                               const int neighbors) {
-  return CGAL::compute_average_spacing<CGAL::Parallel_tag>(
-      points, neighbors);
-}
-
-double compute_average_spacing(const Point_set &points,
-                               const int neighbors, const unsigned int max) {
-  return CGAL::compute_average_spacing<CGAL::Parallel_tag>(
-      points, std::min<unsigned int>(neighbors, max));
-}
-
-bool validate_average_spacing(const double average_spacing,
-                              const char *context) {
-  if (!std::isfinite(average_spacing) || average_spacing <= 0.0) {
-    std::cerr << "Error: " << context << " must be finite and positive.\n";
-    return false;
-  }
-
-  return true;
-}

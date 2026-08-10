@@ -5,27 +5,9 @@
 
 /** \brief Runtime parameters for the point-cloud-to-skeleton pipeline. */
 struct Pipeline_options {
-  std::string input_path =
-      "input/RuptDuPuits_Cascades_sampled_5cm_PCV_normals_classified.ply";
+  std::string input_path = "";
   std::string output_dir = "skeleton_output";
-  double outlier_percent = 0.0;
-  int outlier_neighbors = 6;
-  bool enable_wlop = false;
-  bool enable_smoothing = false;
-  int smoothing_neighbors = 24;
 
-  // wlop_retain_percent is the percentage of points to retain after WLOP
-  // simplification, relative to the input point set size.
-  double wlop_retain_percent = 20.0;
-
-  // wlop_neighbor_radius is in the same units as the input point coordinates,
-  // and should be set according to the point cloud density.
-  // A common choice is to set it to a small multiple (e.g. 2 or 3) of the
-  // average spacing of the input points, which can be computed using
-  // CGAL::compute_average_spacing.
-  double wlop_neighbor_radius = -1.0;
-  unsigned int wlop_iterations = 35;
-  bool wlop_require_uniform_sampling = false;
   bool enable_spatial_subsampling = false;
   double spatial_subsample_distance = 0.0;
   bool enable_cuda = true;
