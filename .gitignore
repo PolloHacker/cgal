@@ -2,10 +2,14 @@ build/
 skeleton_output/
 pipeline_output/
 input/
-AdaptiveSolvers/Bin/
+src/AdaptiveSolvers/Bin/
 
 bags/
 bags_out/
+testing/
 
 .vscode/
 .venv/
+.agents/
+.specify/
+specs/
