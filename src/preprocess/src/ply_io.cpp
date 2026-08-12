@@ -638,21 +638,21 @@ bool load_ply(const std::string &filepath,
               bool enable_cuda) {
     if (enable_spatial_subsampling) {
         return load_spatial_subsampled_ply(filepath, points, min_distance, enable_cuda);
-    }
-    
-    // Normal loader delegates to CGAL native IO
-    if (!CGAL::IO::read_point_set(filepath, points)) {
-        std::cerr << "Error: cannot read point set from " << filepath << "\n";
-        return false;
-    }
-    
-    // Fallback zero normal generation if normals are completely absent
-    if (!points.has_normal_map()) {
-        points.add_normal_map();
-        for (const auto &idx : points) {
-            points.normal(idx) = Vector(0.0, 0.0, 0.0);
+    } else {
+        // Normal loader delegates to CGAL native IO
+        if (!CGAL::IO::read_point_set(filepath, points)) {
+            std::cerr << "Error: cannot read point set from " << filepath << "\n";
+            return false;
         }
-        std::cout << "Input normals were not found/readable. Falling back to zero normals.\n";
+
+        // Fallback zero normal generation if normals are completely absent
+        if (!points.has_normal_map()) {
+            points.add_normal_map();
+            for (const auto &idx : points) {
+                points.normal(idx) = Vector(0.0, 0.0, 0.0);
+            }
+            std::cout << "Input normals were not found/readable. Falling back to zero normals.\n";
+        }
     }
     
     return true;

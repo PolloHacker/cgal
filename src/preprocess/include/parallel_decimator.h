@@ -85,9 +85,5 @@ public:
  */
 std::unique_ptr<IDecimator> create_decimator(const DecimationOptions& options);
 
-/**
- * \brief High-level helper function to decimate a CGAL Point_set in place.
- */
-bool decimate_point_set(Point_set& point_set, double min_distance, bool enable_cuda = true);
 
 } // namespace mesh_reconstruction
