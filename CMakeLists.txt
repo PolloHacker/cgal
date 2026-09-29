@@ -5,9 +5,12 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Default to Release if not specified (avoids accidentally building with -O0)
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
+
+set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=x86-64-v3 -DNDEBUG")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Dependencies
@@ -95,6 +98,7 @@ target_include_directories(poisson_core PUBLIC
 
 target_link_libraries(poisson_core PUBLIC
   adaptive_solvers
+  OpenMP::OpenMP_CXX
 )
 
 target_compile_definitions(poisson_core PUBLIC USE_DOUBLE)

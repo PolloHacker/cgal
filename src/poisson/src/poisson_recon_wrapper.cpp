@@ -384,7 +384,16 @@ PipelineMesh SolveAndExtract(
     _InputOrientedSampleStream sampleStream(*pointStream);
     typename Reconstructor::Poisson::EnvelopeMesh<Real, Dim>* envelopeMesh = nullptr;
 
-    // 3. Solve
+    // 3. Enable multi-threaded Poisson solve (default is ParallelType::NONE = serial)
+#ifdef _OPENMP
+    ThreadPool::ParallelizationType = ThreadPool::ParallelType::OPEN_MP;
+    std::cout << "Using OpenMP for parallelization.\n";
+#else
+    ThreadPool::ParallelizationType = ThreadPool::ParallelType::ASYNC;
+    std::cout << "Using std::async for parallelization.\n";
+#endif
+
+    // 3b. Solve
     implicit_type* implicit = solver_type::Solve(sampleStream, sParams, envelopeMesh);
 
     // 4. Extract Level Set

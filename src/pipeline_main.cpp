@@ -281,12 +281,19 @@ int main(int argc, char* argv[]) {
     // -------------------------------------------------------------------------
     auto start_time = std::chrono::steady_clock::now();
     std::cout << "\n--- [Stage 1] Running Point Cloud Preprocessing ---\n";
+
+    auto prep_start = std::chrono::steady_clock::now();
+
     auto points = std::make_shared<mesh_reconstruction::Point_set>();
     if (!load_oriented_points(input_path, *points, prep_opts)) {
         std::cerr << "Error during Stage 1 point cloud loading.\n";
         wait_bg_tasks();
         return EXIT_FAILURE;
     }
+
+    auto prep_end = std::chrono::steady_clock::now();
+    double prep_duration = std::chrono::duration<double>(prep_end - prep_start).count();
+    std::cout << "Stage 1 completed. Duration: " << prep_duration << " seconds.\n";
 
     if (save_stage1) {
         fs::path s1_out_dir = stage1_dir / stem;
