@@ -13,3 +13,5 @@ testing/
 .agents/
 .specify/
 specs/
+
+scripts/__pycache__/

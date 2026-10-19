@@ -3,9 +3,37 @@
 #include "poisson_recon_wrapper.h"
 #include "wnnc/normal_solver.h"
 #include "wnnc/winding_number_operator.h"
+#include "ply_io.h"
+#include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <cmath>
 #include <vector>
 #include <iostream>
+
+TEST_CASE("ASCII spatial subsampling handles geometry without RGB properties") {
+    const auto stamp=std::chrono::steady_clock::now().time_since_epoch().count();
+    const auto file=std::filesystem::temp_directory_path()/
+        ("cave-no-rgb-"+std::to_string(stamp)+".ply");
+    {
+        std::ofstream stream(file);
+        stream << "ply\nformat ascii 1.0\nelement vertex 3\n"
+                  "property float x\nproperty float y\nproperty float z\n"
+                  "property float intensity\nend_header\n"
+                  "0.01 0.01 0.01 7\n0.02 0.02 0.02 8\n1 1 1 9\n";
+    }
+    mesh_reconstruction::Point_set points;
+    const bool loaded=mesh_reconstruction::load_ply(file.string(),points,true,.1,false);
+    std::filesystem::remove(file);
+    REQUIRE(loaded);
+    REQUIRE(points.size()==2);
+    const auto intensity = points.property_map<float>("intensity");
+    REQUIRE(intensity.second);
+    CHECK_FALSE(points.property_map<unsigned char>("red").second);
+    for (const auto index : points) {
+        CHECK(std::isfinite(intensity.first[index]));
+    }
+}
 
 // Helper to generate a sphere point cloud
 std::vector<PipelinePoint> generate_sphere(double radius, int u_segments, int v_segments) {

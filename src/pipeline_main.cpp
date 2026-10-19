@@ -10,6 +10,7 @@
 #include <future>
 #include <thread>
 #include <system_error>
+#include <exception>
 
 #include <CLI11.hpp>
 

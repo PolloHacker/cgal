@@ -577,9 +577,11 @@ bool load_spatial_subsampled_ply(const std::string &filepath,
         Point3D pt;
         pt.x = x; pt.y = y; pt.z = z;
         pt.nx = nx; pt.ny = ny; pt.nz = nz;
-        pt.r = to_uchar(r, header.vertex_properties[header.idx_red].type);
-        pt.g = to_uchar(g, header.vertex_properties[header.idx_green].type);
-        pt.b = to_uchar(b, header.vertex_properties[header.idx_blue].type);
+        if (has_colors) {
+            pt.r = to_uchar(r, header.vertex_properties[header.idx_red].type);
+            pt.g = to_uchar(g, header.vertex_properties[header.idx_green].type);
+            pt.b = to_uchar(b, header.vertex_properties[header.idx_blue].type);
+        }
         pt.intensity = static_cast<float>(intensity);
         chunk_buffer.push_back(pt);
 
