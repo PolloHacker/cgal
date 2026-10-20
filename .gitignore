@@ -2,6 +2,7 @@ build/
 skeleton_output/
 pipeline_output/
 input/
+output/
 src/AdaptiveSolvers/Bin/
 
 bags/

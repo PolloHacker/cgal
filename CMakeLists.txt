@@ -134,6 +134,10 @@ endif()
 
 add_library(wnnc_core ${WNNC_CORE_SOURCES})
 
+set_target_properties(wnnc_core PROPERTIES
+  POSITION_INDEPENDENT_CODE ON
+)
+
 target_include_directories(wnnc_core PUBLIC ${WNNC_CORE_INCLUDES})
 
 target_link_libraries(wnnc_core PUBLIC
@@ -152,6 +156,30 @@ endif()
 
 if(NOT MSVC)
   target_compile_options(wnnc_core PUBLIC -fno-math-errno)
+endif()
+
+# ─────────────────────────────────────────────────────────────────────────────
+# spt_kernels — Shared library for SPT Superpoint Filtering + WNNC Normals
+# ─────────────────────────────────────────────────────────────────────────────
+add_library(spt_kernels SHARED
+  src/spt_filter/spt_kernels.cpp
+  src/wnnc/python/ext/wn_treecode/wn_treecode_cpu/wn_treecode_cpu_treeutils.cpp
+  src/wnnc/python/ext/wn_treecode/wn_treecode_cpu/wn_treecode_cpu_kernels.cpp
+  src/poisson/src/winding_number_operator_cpu.cpp
+)
+
+target_include_directories(spt_kernels PRIVATE
+  ${WNNC_CORE_INCLUDES}
+)
+
+target_link_libraries(spt_kernels PRIVATE
+  Eigen3::Eigen
+  OpenMP::OpenMP_CXX
+  Threads::Threads
+)
+
+if(NOT MSVC)
+  target_compile_options(spt_kernels PRIVATE -fno-math-errno)
 endif()
 
 # ─────────────────────────────────────────────────────────────────────────────
