@@ -1,5 +1,10 @@
 # Superpoint & Multi-Scale Geometric Filtering Pipeline for Speleological Point Clouds
 
+> **Current workflow (20 October 2026):** see
+> [SPT training and validation](spt-training-and-validation.md) for the implemented
+> boundary filter, PyTorch GraphSAGE training, annotation preparation, and commands.
+> Section 6 below preserves historical benchmarks; Section 7 records the new checks.
+
 ## 1. Overview & Problem Statement
 
 Speleological 3D point clouds acquired via Terrestrial Laser Scanning (TLS) and mobile SLAM LiDAR frequently capture both the subterranean **cavern interior** (bedrock walls, vaulted ceilings, floors, stalactites, stalagmites, breakdown boulders) and **exterior non-cavern clutter** near cave entrances, dolines, and skylights (trees, bushes, hanging roots, surface terrain outside the drip line, and anthropogenic scanner artifacts).
@@ -96,7 +101,10 @@ For each subsampled point $p_i$, compute the local $3 \times 3$ covariance matri
 * **Planarity, Linearity, and Scattering (Sphericity):**
   $$P = \frac{\lambda_2 - \lambda_3}{\lambda_1}, \quad L = \frac{\lambda_1 - \lambda_2}{\lambda_1}, \quad S = \frac{\lambda_3}{\lambda_1}$$
 * **Normal Dispersion / Roughness Entropy:**
-  $$D_{\mathbf{n}} = 1 - \left\| \frac{1}{|\mathcal{N}_r(i)|} \sum_{j \in \mathcal{N}_r(i)} \mathbf{n}_j \right\|_2 \in [0, 1]$$
+  The implementation uses the sign-invariant structure tensor
+  $T_i = |\mathcal{N}_r(i)|^{-1}\sum_j \mathbf{n}_j\mathbf{n}_j^T$ and
+  $D_{\mathbf{n}} = \frac{3}{2}(1-\lambda_{\max}(T_i)) \in [0,1]$.
+  This avoids treating a normal polarity flip as foliage roughness.
   *(Even fractured or scalloped cave walls maintain coherent normal orientations at $r = 0.20\text{ m}$ ($D_{\mathbf{n}} < 0.18$), whereas foliage exhibits chaotic normals ($D_{\mathbf{n}} > 0.45$)).*
 
 #### B. Global 3D Enclosure Descriptors (Solving Speleothem vs. Vegetation Ambiguity)
@@ -110,16 +118,21 @@ Because fragile speleothems (stalactites, coralloids, breakdown rubble) inside a
    * Re-use `scalar_Illuminance_(PCV)` where already present in Cohort A, or compute fast hemispherical visibility over 64 directions.
 
 ### Stage 4: Hierarchical $\ell_0$-Cut Pursuit Superpoint Partitioning ($P_0 \to P_1 \to P_2$)
-Instead of thresholding noisy point features individually:
-1. Build the $k$-NN spatial adjacency graph ($k = 10$) on the $P_0$ voxels.
-2. Construct the **partition feature vector** $\mathbf{f}_i \in \mathbb{R}^d$ by concatenating normalized geometric and enclosure features:
-   $$\mathbf{f}_i = \left[ P_{\text{fine}},\, S_{\text{fine}},\, L_{\text{fine}},\, \kappa_{\text{coarse}},\, V,\, H_{\text{signed}},\, D_{\mathbf{n}},\, w_{\text{occ}} \cdot O_{\text{up}} \right]$$
-   *(Including $O_{\text{up}}$ directly in the cut-pursuit objective forces a sharp superpoint boundary right along the cave entrance drip line).*
-3. Run parallel **$\ell_0$-cut pursuit** (`grid_graph` / `cp_d0_dist`) with:
-   * `pcp_regularization = [0.04, 0.15]`
-   * `pcp_spatial_weight = [0.05, 0.02]`
-   * `pcp_cutoff = [10, 30]`
-   This compresses millions of $P_0$ points into **$5,000–25,000$ geometrically homogeneous $P_1$ superpoints** and **$500–3,000$ regional $P_2$ superpoints**.
+1. The C++ builder selects the ten nearest neighbors within $3.5d_0$; only an
+   isolated node receives a single global nearest-neighbor edge. Affinities combine
+   inverse distance, absolute normal alignment, and normal-dispersion contrast.
+2. Compute **separate partition geometry** within a strict $2.85d_0$ radius,
+   without sparse-radius expansion or WNNC/PCA blending. The vector is
+   $[P_f, 1.5S_f, L_f, 3\kappa_f, 1.5D_f, 0.35n_{z,f}, 0.7O_{roof},
+   0.8\max(0,O_{up}-O_{roof})]$. Coarse geometry is reserved for classification
+   and rock-coherence estimation in the global enclosure calculation.
+3. Run the **upstream parallel cut-pursuit solver**, replacing the earlier custom
+   greedy region merger, with regularization `[0.015, 0.08]`, spatial coordinate
+   weights `[0.02, 0.008]`, and minimum P0 weights `[3, 15]`.
+4. P2 partitions the reduced P1 graph using summed boundary affinities and node
+   weights. It is no longer an independent partition of P0: each P1 has exactly
+   one P2 parent. The P1 adjacency used by scoring and learning comes from the
+   same pruned graph. Actual node counts are reported below rather than assumed.
 
 ### Stage 5: Superpoint Graph Scoring & Topological Geodesic Filtering
 For each $P_1$ superpoint $\mathcal{S}_k$, aggregate the robust median/mean of its constituent $P_0$ features and evaluate a two-step graph filter:
@@ -160,6 +173,14 @@ The standalone pipeline outputs two `.ply` files per cave (restored to original 
 
 ## 5. Future Extension: Weakly-Supervised SPT / Classifier Training
 
+The small GraphSAGE path is now implemented in `train_spt_classifier.py`,
+`spt_torch.py`, and `spt_learning.py`. It includes masked seeds, raw-point mouth
+and skylight CutMix, original-point soft histograms, purity-weighted KL,
+Lovasz on pure labeled nodes, versioned graph caches, portable inference, and
+cave-system-separated validation. Full SPT transformer training remains a future
+extension. Follow [the current workflow](spt-training-and-validation.md), including
+its explicit distinction between semantic classes and structural cave zones.
+
 Once the unsupervised superpoint pipeline has been validated on 5–10 representative S3 caves in CloudCompare:
 1. Any subtle entrance transition errors can be corrected in minutes in CloudCompare by flipping the label of entire **$P_1 / P_2$ superpoints** rather than individual points.
 2. Those verified superpoint labels can then be used to train either:
@@ -168,7 +189,14 @@ Once the unsupervised superpoint pipeline has been validated on 5–10 represent
 
 ---
 
-## 6. Empirical Benchmarks & Massive-Scale Optimizations (Up to 311.7M Points)
+## 6. Historical Benchmarks & Massive-Scale Optimizations (Up to 311.7M Points)
+
+**Historical snapshot:** the following settings and results precede the latest
+boundary-filtering changes. In particular, the `1.2 * nz` partition weight,
+independent P1/P2 partitions, and earlier runtime tables do not describe the
+current implementation. A later Gemini iteration reintroduced 3.54% removal on
+`interior_lapinha`; rebuilding its final C++ edit reproduced about 4% removal.
+The new checks in Section 7 supersede these claims.
 
 The standalone pipeline is implemented in [spt_filter.py](file:///home/projval/Documents/cgal/spt_filter.py) backed by C++20 OpenMP/Eigen3/WNNC kernels in [src/spt_filter/spt_kernels.cpp](file:///home/projval/Documents/cgal/src/spt_filter/spt_kernels.cpp) (`build/libspt_kernels.so`).
 
@@ -203,5 +231,61 @@ The standalone pipeline is implemented in [spt_filter.py](file:///home/projval/D
 | `point-clouds_S11A_0257.ply` *(Entrance)* | 10,000,000 | 1,566,901 ($4\text{ cm}$) | $17,037 \to 2,326$ | **94.18%** (9,890,064 pts) | **91,257 (5.82%)** | 41.8% / 9.2% / 43.2% | **26.85s** |
 | `Lp_JL.ply` *(Forested Entrance)* | 108,499,982 | 1,800,359 ($8\text{ cm}$) | $38,622 \to 5,146$ | **41.32% $P_0$** (95,207,430 pts) | **1,056,533 (58.69% $P_0$ / 13.29M pts)** | 12.7% / 11.0% / 17.6% | **23.48s** |
 | `Lp_Boi.ply` *(Forested Karst)* | 311,721,819 | 1,440,460 ($12\text{ cm}$) | $21,326 \to 2,951$ | **78.41% $P_0$** (292,407,417 pts) | **310,987 (21.59% $P_0$ / 19.31M pts)** | 37.4% / 8.9% / 32.0% | **31.74s** |
+
+## 7. Current Boundary Filter and Learned-Head Checks (20 October 2026)
+
+Fresh diagnostics and per-case JSON reports are in `output/spt_updated/`.
+The fixed global voxel origin changes P0 counts relative to historical runs.
+These are heuristic outputs, **not measured entrance accuracy**. Pipeline times
+exclude PLY export and, for non-streamed files, input parsing.
+
+| Scan | P0 voxels | P1 / P2 nodes | Cavern retained at P0 | Pipeline time |
+| :--- | ---: | ---: | ---: | ---: |
+| `rupt` | 346,369 | 24,350 / 2,225 | 100.00% | 5.33 s |
+| `BaumeDeLongeaigue` | 371,777 | 37,485 / 5,221 | 100.00% | 6.27 s |
+| `diaclase` | 140,964 | 21,596 / 3,406 | 100.00% | 7.67 s |
+| `interior_lapinha` | 503,105 | 88,272 / 34,394 | 100.00% | 10.99 s |
+| `S11A_0257` | 1,566,685 | 89,133 / 15,853 | 85.46% | 34.58 s |
+| `Lp_JL` | 2,155,086 | 159,555 / 33,130 | 17.63% | 31.72 s |
+| `Lp_Boi` | 2,032,084 | 35,603 / 8,576 | 71.21% | 32.70 s |
+
+The four designated pure-interior scans pass retention checks without forcing
+their semantic predictions to cavern. `--pure-interior` affects supervision only.
+The older appended-tree stress scene also passes, but is easier than the new
+mouth/skylight CutMix scenes and must not substitute for held-out real entrances.
+
+Full-resolution cleaned exports have also been generated and their binary PLY
+header/payload lengths checked. The three entrance outputs retain 9,510,481 /
+10,000,000 points (`S11A_0257`), 83,796,426 / 108,499,982 (`Lp_JL`), and
+273,752,951 / 311,721,819 (`Lp_Boi`). These raw-point fractions differ substantially
+from P0 fractions because the original scans have nonuniform density.
+
+Fifteen regression tests cover the native boundary graph, radius components,
+disconnected identical surfaces, nested hierarchy, streaming alignment, mixed
+labels, ignored gradients, annotation conflicts, split leakage, and inference
+parity. Equal upstream cut-pursuit labels are explicitly split into connected
+components, preserving the energy while preventing disconnected superpoints.
+
+The experimental GraphSAGE artifact is `output/spt_updated/spt_graphsage.npz`
+(and `.pt`), trained for 60 epochs on `rupt`, `diaclase`, and `interior_lapinha`,
+plus one mouth and one skylight CutMix scene per cave. Optimization took 40.92 s
+on CPU, separately from geometry/cache creation. On held-out **Baume** geometry,
+the head retains 98.56% of pure interior points; its synthetic mouth mIoU is
+79.40%, versus a 98.50% partition oracle. Synthetic skylight vegetation IoU is
+71.68%, with cavern recall 98.84%. See `synthetic_validation.json` for complete
+class counts and absent-class behavior. This head remains **opt-in**: its 1.44%
+interior loss is worse than the default heuristic's retention, and real entrance
+accuracy has not been measured. Training loss is not used to claim readiness.
+
+Current implementation changes include genuine upstream cut-pursuit with a nested
+P2 hierarchy, separate fine partition neighborhoods, contrast-sensitive bounded
+edges, global streaming alignment, explicit masked supervision, PyTorch GraphSAGE,
+original-point soft histograms, KL/Lovasz losses, portable model inference, and
+full-cloud-context validation. Input `PCV`, RGB, intensity, and existing
+`scalar_Classification` are not used as semantic ground truth or model inputs.
+
+See [the annotation and training workflow](spt-training-and-validation.md) for
+the cave crops and optional real canopy donors needed for the next benchmark.
+The validation caves and any canopy taken from them must stay out of training.
 
 

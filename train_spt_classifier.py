@@ -1,447 +1,320 @@
 #!/usr/bin/env python3
-"""
-Zero-Ground-Truth Superpoint Graph Classifier Trainer (Parts 2 & 3 of SPT Plan)
-Implements the 4-Phase Self-Training & Physics-Consistent 3D CutMix Pipeline:
-  - Phase 1: Confidence-Masked Pseudo-Labeling (ignore_index = -100 on drip-line transition)
-  - Phase 2: Physics-Consistent 3D CutMix (splices pure cave + pure canopy chunks BEFORE
-             Stage 2 WNNC & Stage 3 Enclosure raycasting for exact boundary ground truth)
-  - Phase 3: Soft Label Histograms & Purity-Weighted KL-Divergence Loss:
-             L(S_k) = (1 - H(q_k)) * KL(q_k || p_hat_k) + Lovasz-Softmax (ignore_index=-100)
-  - Phase 4: Evaluation on CloudCompare "Superpoint Painted" entrance validation crops
-  - Part 3 (Option A): 2-Layer Superpoint GraphSAGE/GAT + MLP head exported to portable .npz
-             (and .pt when PyTorch is available) for <10ms inference inside spt_filter.py.
-"""
+"""Train a two-layer PyTorch GraphSAGE from masked seeds and raw-point 3D CutMix.
 
+Portable .npz inference uses NumPy/SciPy. Real validation requires a manifest with
+explicit cave-system groups and a separate scalar_ground_truth annotation field.
+"""
 import argparse
-import glob
-import os
+import hashlib
+import json
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-from spt_filter import (
-    inspect_ply_header,
-    load_spt_kernels,
-    read_ply,
-    run_spt_pipeline,
-    run_spt_pipeline_from_p0,
-    stream_subsample_ply,
-)
+from scipy.spatial import cKDTree
+
+from spt_filter import (inspect_ply_header, load_spt_kernels, read_ply,
+                        run_spt_pipeline, run_spt_pipeline_from_p0, stream_subsample_ply)
+from spt_learning import (SCHEMA, cave_system_id, class_histograms, deform_canopy_chunk,
+                          load_graph, save_graph, supervision_histogram)
 
 
-# -----------------------------------------------------------------------------
-# Graph Message Passing Utilities (Degree-Normalized Adjacency + Edge Attention)
-# -----------------------------------------------------------------------------
-def build_graph_operators(
-    num_nodes: int, edge_u: np.ndarray, edge_v: np.ndarray, sp_pos: np.ndarray
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Returns directed edges (src, dst) and inverse-distance edge weights normalized per destination node.
-    """
-    if len(edge_u) == 0 or num_nodes <= 1:
-        return (
-            np.empty(0, dtype=np.int32),
-            np.empty(0, dtype=np.int32),
-            np.empty(0, dtype=np.float32),
-        )
-    src = np.concatenate([edge_u, edge_v]).astype(np.int32)
-    dst = np.concatenate([edge_v, edge_u]).astype(np.int32)
-    dist = np.linalg.norm(sp_pos[src] - sp_pos[dst], axis=1).astype(np.float32)
-    raw_w = 1.0 / (dist + 0.10)
-    deg_sum = np.bincount(dst, weights=raw_w, minlength=num_nodes).astype(np.float32)
-    norm_w = raw_w / np.maximum(deg_sum[dst], 1e-6)
-    return src, dst, norm_w.astype(np.float32)
-
-
-def aggregate_neighbors(
-    x: np.ndarray, num_nodes: int, src: np.ndarray, dst: np.ndarray, norm_w: np.ndarray
-) -> np.ndarray:
-    """
-    Computes weighted neighbor feature aggregation M @ X for GraphSAGE / GAT layer.
-    """
-    out = np.zeros_like(x, dtype=np.float32)
-    if len(src) == 0:
-        return out
-    weighted_msg = x[src] * norm_w[:, None]
-    np.add.at(out, dst, weighted_msg)
-    return out
-
-
-# -----------------------------------------------------------------------------
-# Phase 2: Physics-Consistent 3D CutMix Generator (Splice BEFORE Stage 2 & 3)
-# -----------------------------------------------------------------------------
-def generate_cutmix_superpoint_graph(
-    lib,
-    cave_xyz_f64: np.ndarray,
-    canopy_chunks_xyz: List[np.ndarray],
-    voxel_size: float = 0.04,
-    seed: int = 42,
-) -> Dict[str, np.ndarray]:
-    """
-    Takes a 100% pure interior cave scan (exact label y = 0) and splices either:
-      - Real harvested canopy chunks (from --canopy-chunks) or
-      - Procedural 3D trees + exterior talus slope
-    onto one end of the conduit and/or an unroofed skylight patch BEFORE running
-    Stage 2 (WNNC) and Stage 3 (spt_compute_enclosure).
-    Computes soft label histograms q_k = [p_cavern, p_veg, p_ext_ground] and
-    Shannon entropy purity weights (1 - H(q_k)) for every P1 superpoint.
-    """
+def generate_cutmix_superpoint_graph(lib, cave_xyz_f64, canopy_chunks_xyz,
+                                    voxel_size=0.04, seed=42, scenario="mouth"):
+    """Open a raw cave mouth/skylight, graft raw vegetation, then rerun all geometry."""
     rng = np.random.default_rng(seed)
-    min_pt = cave_xyz_f64.min(axis=0)
-    max_pt = cave_xyz_f64.max(axis=0)
-
-    # Pick entrance mouth at max_Y (or min_Y randomly)
-    ext_y0 = max_pt[1] - 0.5
-    ground_z = float(np.percentile(cave_xyz_f64[:, 2], 35))
-
-    # 1. Exterior Talus / Ground Slope (Exact Class 2)
-    n_ground = 18000
-    gx = rng.uniform(min_pt[0] - 2.0, max_pt[0] + 2.0, n_ground)
-    gy = rng.uniform(ext_y0, ext_y0 + 16.0, n_ground)
-    slope_grade = rng.uniform(0.06, 0.22)
-    gz = ground_z + slope_grade * (gy - ext_y0) + rng.normal(0.0, 0.025, n_ground)
-    ground_xyz = np.column_stack([gx, gy, gz])
-
-    # 2. Graft Real Harvested Canopy Chunks (if available) or Procedural 3D Trees (Exact Class 1)
-    veg_xyz_list = []
-    if len(canopy_chunks_xyz) > 0:
-        for idx_c in range(min(4, len(canopy_chunks_xyz))):
-            chunk = canopy_chunks_xyz[idx_c % len(canopy_chunks_xyz)].copy()
-            chunk -= chunk.mean(axis=0, keepdims=True)
-            # Random Z-axis rotation and scale
-            theta = rng.uniform(0, 2 * np.pi)
-            c, s = np.cos(theta), np.sin(theta)
-            rot = np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
-            chunk = (chunk @ rot.T) * rng.uniform(0.85, 1.15)
-            # Place chunk along the entrance rim and exterior slope
-            tx = rng.uniform(min_pt[0] + 2.0, max_pt[0] - 2.0)
-            ty = ext_y0 + rng.uniform(-1.0, 10.0)
-            tz = ground_z + slope_grade * max(0.0, ty - ext_y0) - np.percentile(chunk[:, 2], 5)
-            veg_xyz_list.append(chunk + np.array([tx, ty, tz]))
+    center = cave_xyz_f64.mean(axis=0)
+    local = cave_xyz_f64-center
+    _, axes = np.linalg.eigh(np.cov(local[:, :2].T))
+    forward = axes[:, -1] * rng.choice([-1, 1])
+    across = np.array([-forward[1], forward[0]])
+    longitudinal = local[:, :2] @ forward
+    lateral = local[:, :2] @ across
+    if scenario == "mouth":
+        mouth = np.percentile(longitudinal, rng.uniform(70, 88))
+        kept = longitudinal <= mouth
+        near = (longitudinal > mouth-3) & kept
+        origin = center[:2]+mouth*forward
+    elif scenario == "skylight":
+        mouth = np.percentile(longitudinal, rng.uniform(30, 70))
+        origin = center[:2]+mouth*forward
+        horizontal = np.linalg.norm(cave_xyz_f64[:, :2]-origin, axis=1)
+        near = horizontal < 3.0
+        if near.sum() < 20:
+            return generate_cutmix_superpoint_graph(lib, cave_xyz_f64, canopy_chunks_xyz,
+                                                    voxel_size, seed, "mouth")
+        roof_cut = np.percentile(cave_xyz_f64[near, 2], 60)
+        kept = ~(near & (cave_xyz_f64[:, 2] > roof_cut))
     else:
-        tree_centers = [
-            (min_pt[0] + 3.5, ext_y0 + 1.5),
-            (min_pt[0] + 9.5, ext_y0 + 3.0),
-            (min_pt[0] + 15.5, ext_y0 + 2.5),
-            (min_pt[0] + 6.5, ext_y0 + 8.0),
-            (min_pt[0] + 13.5, ext_y0 + 9.5),
-        ]
-        for tx, ty in tree_centers:
-            base_z = ground_z + slope_grade * max(0.0, ty - ext_y0)
-            # Cylindrical tree trunk (r=0.20m..0.30m, height=5.0m) touching entrance slope
-            n_trunk = 1200
-            th = rng.uniform(0, 2 * np.pi, n_trunk)
-            tz = rng.uniform(base_z, base_z + 5.0, n_trunk)
-            rad = rng.uniform(0.18, 0.28) + rng.normal(0, 0.015, n_trunk)
-            veg_xyz_list.append(
-                np.column_stack([tx + rad * np.cos(th), ty + rad * np.sin(th), tz])
-            )
-            # Dense understory bush at trunk base
-            n_bush = 1000
-            veg_xyz_list.append(
-                np.array([tx, ty, base_z + 0.8]) + rng.normal(0.0, 0.55, (n_bush, 3))
-            )
-            # Upper 3D foliage crown
+        raise ValueError("CutMix scenario must be mouth or skylight")
+    ground_z = float(np.percentile(cave_xyz_f64[near, 2], 15))
+    roof_z = float(np.percentile(cave_xyz_f64[near, 2], 85))
+    cave = cave_xyz_f64[kept]
+    width = max(2.0, min(12.0, float(np.percentile(lateral, 90)-np.percentile(lateral, 10))))
+    grade = rng.uniform(0.05, 0.20)
+    if scenario == "mouth":
+        centers = [(rng.uniform(-width*.40, width*.40), f) for f in (1.5, 3.0, 5.0, 7.5, 10.5)]
+    else:
+        centers = [(rng.uniform(-2.0, 2.0), rng.uniform(-2.0, 2.0)) for _ in range(3)]
+    vegetation = []
+    for index, (a, f) in enumerate(centers):
+        xy = origin+a*across+f*forward
+        base_z = (ground_z+grade*max(f, 0)) if scenario == "mouth" else roof_z
+        if canopy_chunks_xyz:
+            donor_idx = int(rng.integers(len(canopy_chunks_xyz)))
+            chunk = deform_canopy_chunk(canopy_chunks_xyz[donor_idx], rng)
+            chunk += np.r_[xy, base_z-np.percentile(chunk[:, 2], 2)]
+            if scenario == "mouth":
+                # Keep grafted exterior trees outside the enclosed cave tunnel behind the drip line
+                chunk_long = (chunk[:, :2] - center[:2]) @ forward
+                chunk = chunk[chunk_long >= mouth - 0.25]
+            else:
+                # Keep skylight trees on/above the skylight roof opening
+                chunk = chunk[chunk[:, 2] >= roof_cut - 0.25]
+            if len(chunk):
+                vegetation.append(chunk)
+        else:
+            theta = rng.uniform(0, 2*np.pi, 1400)
+            radius = rng.uniform(0.16, 0.28)+rng.normal(0, 0.012, len(theta))
+            trunk = np.column_stack([xy[0]+radius*np.cos(theta), xy[1]+radius*np.sin(theta),
+                                      rng.uniform(base_z, base_z+5, len(theta))])
+            vegetation += [trunk, np.r_[xy, base_z+0.8]+rng.normal(0, .55, (1200, 3))]
             for _ in range(8):
-                sub_c = np.array([
-                    tx + rng.uniform(-2.0, 2.0),
-                    ty + rng.uniform(-2.0, 2.0),
-                    base_z + rng.uniform(4.0, 8.5),
-                ])
-                veg_xyz_list.append(sub_c + rng.normal(0.0, 0.65, (500, 3)))
-
-    veg_xyz = np.vstack(veg_xyz_list)
-
-    # Combine raw points BEFORE Stage 2 (WNNC) and Stage 3 (Enclosure Raycasting)
-    comb_xyz = np.vstack([cave_xyz_f64, veg_xyz, ground_xyz])
-    comb_gt = np.concatenate([
-        np.zeros(len(cave_xyz_f64), dtype=np.int32),
-        np.ones(len(veg_xyz), dtype=np.int32),
-        np.full(len(ground_xyz), 2, dtype=np.int32),
-    ])
-
-    res = run_spt_pipeline(lib, comb_xyz, None, voxel_size=voxel_size)
-    p0_gt = comb_gt[res["p0_to_orig"]]
-    p1_labels = res["superpoint_p1"]
-    num_p1 = res["num_p1"]
-
-    # Phase 3: Compute Soft Class Count Histograms c_k = [n_cav, n_veg, n_ext] per P1 superpoint
-    hist = np.zeros((num_p1, 3), dtype=np.float32)
-    for c in range(3):
-        hist[:, c] = np.bincount(p1_labels, weights=(p0_gt == c).astype(np.float32), minlength=num_p1)
-
-    tot = np.maximum(hist.sum(axis=1, keepdims=True), 1e-6)
-    soft_q = hist / tot
-    # Normalized Shannon entropy H(q_k) in [0, 1]
-    entropy = -np.sum(soft_q * np.log(np.maximum(soft_q, 1e-8)), axis=1) / np.log(3.0)
-    purity_weight = np.clip(1.0 - entropy, 0.0, 1.0).astype(np.float32)
-
-    return {
-        "X": res["sp_feature_matrix"],
-        "edge_u": res["edge_u"],
-        "edge_v": res["edge_v"],
-        "sp_pos": res["sp_pos"],
-        "sp_counts": res["sp_counts"],
-        "soft_q": soft_q.astype(np.float32),
-        "purity_weight": purity_weight,
-        "valid_mask": np.ones(num_p1, dtype=bool),
-    }
+                crown = np.r_[xy+rng.uniform(-1.8, 1.8, 2), base_z+rng.uniform(4, 8)]
+                vegetation.append(crown+rng.normal(0, .65, (500, 3)))
+    vegetation = np.vstack(vegetation)
+    xyz = np.vstack([cave, vegetation])
+    truth = np.concatenate([np.zeros(len(cave), dtype=np.int32), np.ones(len(vegetation), dtype=np.int32)])
+    result = run_spt_pipeline(lib, xyz, None, voxel_size=voxel_size)
+    # Every raw source point contributes, including different labels sharing a P0 voxel.
+    mapping = result["superpoint_p1"][result["orig_to_p0"]]
+    histogram = class_histograms(truth, mapping, result["num_p1"])
+    return result, histogram
 
 
-# -----------------------------------------------------------------------------
-# Phase 1: Confidence-Masked Pseudo-Label Graph Extractor (ignore_index = -100)
-# -----------------------------------------------------------------------------
-def extract_pseudo_labeled_graph(
-    lib, ply_path: Path, voxel_size: float = 0.04, is_pure_interior: bool = False
-) -> Dict[str, np.ndarray]:
-    fmt, num_vertices, _, _ = inspect_ply_header(ply_path)
-    if fmt == "binary_little_endian" and num_vertices > 15_000_000:
-        n_orig, centroid_f64, p0_xyz, p0_normals_in = stream_subsample_ply(
-            lib, ply_path, voxel_size=max(voxel_size, 0.08)
+def extract_pseudo_labeled_graph(lib, path, voxel_size=0.04, is_pure_interior=False,
+                                 source_path=None, label_field="scalar_ground_truth",
+                                 already_p0=False):
+    path = Path(path)
+    source = Path(source_path) if source_path else path
+    fmt, count, props, _ = inspect_ply_header(path)
+    prop_names = {name for name, _ in props}
+    has_ground_truth = label_field in prop_names
+    if not is_pure_interior and not has_ground_truth:
+        raise ValueError(
+            f"Heuristic seed generation is disabled; entrance training scan {path} "
+            f"must contain explicit '{label_field}' annotations"
         )
-        res = run_spt_pipeline_from_p0(
-            lib, n_orig, centroid_f64, p0_xyz, p0_normals_in, voxel_size=max(voxel_size, 0.08)
-        )
+    if source.resolve() != path.resolve():
+        ann_xyz, _, fields = read_ply(path)
+        truth = fields[label_field].astype(np.int32)
+        s_fmt, s_count, _, _ = inspect_ply_header(source)
+        if s_fmt == "binary_little_endian" and s_count > 15_000_000:
+            n, centroid, xyz, normals = stream_subsample_ply(lib, source, voxel_size)
+            result = run_spt_pipeline_from_p0(lib, n, centroid, xyz, normals,
+                                              voxel_size=voxel_size, pure_interior=False)
+        else:
+            xyz, normals, _ = read_ply(source)
+            result = run_spt_pipeline(lib, xyz, normals, voxel_size=voxel_size, pure_interior=False)
+        tree = cKDTree(result["p0_xyz_f64"])
+        dist, mapping_p0 = tree.query(ann_xyz, k=1, workers=-1)
+        tol = np.sqrt(3) * voxel_size * 1.05
+        if np.any(dist > tol):
+            raise ValueError(f"Annotation coordinates in {path} exceed {tol:.4f} m tolerance from {source}")
+        histogram = supervision_histogram(result, is_pure_interior=False,
+                                          point_labels=truth,
+                                          point_mapping=result["superpoint_p1"][mapping_p0])
+        return result, histogram
+
+    if fmt == "binary_little_endian" and count > 15_000_000 and not has_ground_truth:
+        n, centroid, xyz, normals = stream_subsample_ply(lib, path, voxel_size)
+        result = run_spt_pipeline_from_p0(lib, n, centroid, xyz, normals,
+                                          voxel_size=voxel_size, pure_interior=is_pure_interior)
+        histogram = supervision_histogram(result, is_pure_interior=is_pure_interior)
+    elif already_p0:
+        xyz, normals, fields = read_ply(path)
+        centroid = xyz.mean(axis=0, keepdims=True)
+        p0_xyz = (xyz - centroid).astype(np.float32)
+        result = run_spt_pipeline_from_p0(lib, len(xyz), centroid, p0_xyz, normals,
+                                          voxel_size=voxel_size,
+                                          pure_interior=is_pure_interior and not has_ground_truth)
+        if has_ground_truth:
+            truth = fields[label_field].astype(np.int32)
+            histogram = supervision_histogram(result, is_pure_interior=False,
+                                              point_labels=truth,
+                                              point_mapping=result["superpoint_p1"])
+        else:
+            histogram = supervision_histogram(result, is_pure_interior=is_pure_interior)
     else:
-        xyz_f64, normals_in, _ = read_ply(ply_path)
-        res = run_spt_pipeline(lib, xyz_f64, normals_in, voxel_size=voxel_size)
-
-    num_p1 = res["num_p1"]
-    pseudo = res["sp_pseudo_label"].copy()
-    if is_pure_interior:
-        pseudo[:] = 0
-
-    valid_mask = pseudo != -100
-    soft_q = np.zeros((num_p1, 3), dtype=np.float32)
-    for c in range(3):
-        soft_q[pseudo == c, c] = 1.0
-    purity_weight = valid_mask.astype(np.float32)
-
-    return {
-        "X": res["sp_feature_matrix"],
-        "edge_u": res["edge_u"],
-        "edge_v": res["edge_v"],
-        "sp_pos": res["sp_pos"],
-        "sp_counts": res["sp_counts"],
-        "soft_q": soft_q,
-        "purity_weight": purity_weight,
-        "valid_mask": valid_mask,
-    }
+        xyz, normals, fields = read_ply(path)
+        result = run_spt_pipeline(lib, xyz, normals, voxel_size=voxel_size,
+                                  pure_interior=is_pure_interior and not has_ground_truth)
+        if has_ground_truth:
+            truth = fields[label_field].astype(np.int32)
+            histogram = supervision_histogram(result, is_pure_interior=False, point_labels=truth)
+        else:
+            histogram = supervision_histogram(result, is_pure_interior=is_pure_interior)
+    return result, histogram
 
 
-# -----------------------------------------------------------------------------
-# Part 3 (Option A): 2-Layer Superpoint GraphSAGE + Residual MLP Classifier
-# Trained with Purity-Weighted Soft KL-Divergence + Multi-Class Lovasz-Softmax
-# -----------------------------------------------------------------------------
-def softmax(logits: np.ndarray) -> np.ndarray:
-    z = logits - np.max(logits, axis=1, keepdims=True)
-    e = np.exp(z)
-    return e / np.maximum(np.sum(e, axis=1, keepdims=True), 1e-8)
+def validate_splits(manifest):
+    train = manifest.get("training", [])
+    canopy = manifest.get("canopy_chunks", [])
+    validation = manifest.get("validation", [])
+    for record in train+canopy+validation:
+        if not record.get("path") or not record.get("cave_system"):
+            raise ValueError("Every manifest entry needs path and cave_system")
+    train_groups = {cave_system_id(r["cave_system"]) for r in train+canopy}
+    validation_groups = {cave_system_id(r["cave_system"]) for r in validation}
+    overlap = train_groups & validation_groups
+    if overlap:
+        raise ValueError(f"Training/canopy sources overlap validation cave systems: {sorted(overlap)}")
+    for record in train:
+        if record.get("role") not in ("interior", "entrance"):
+            raise ValueError("Training role must be interior or entrance")
+    resolved_train = {str(Path(r["path"]).resolve()) for r in train+canopy}
+    if any(str(Path(r[key]).resolve()) in resolved_train for r in validation for key in ("path", "source") if key in r):
+        raise ValueError("The same file appears in training and validation")
+    return manifest
 
 
-def relu(x: np.ndarray) -> np.ndarray:
-    return np.maximum(0.0, x)
+def source_fingerprint(path):
+    path = Path(path).resolve()
+    stat = path.stat()
+    return {"path": str(path), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
 
 
-def train_superpoint_gnn(
-    graphs: List[Dict[str, np.ndarray]],
-    epochs: int = 120,
-    lr: float = 3e-3,
-    weight_decay: float = 1e-4,
-    hidden_dim: int = 64,
-) -> Dict[str, np.ndarray]:
-    """
-    Trains a 2-Layer GraphSAGE [X || Agg(X) || Agg(Agg(X))] + 2-Layer Residual MLP
-    using AdamW on purity-weighted KL divergence + inverse-frequency class weights.
-    """
-    # Precompute 1-hop and 2-hop graph-aggregated features for every superpoint graph
-    all_feat_list = []
-    all_q_list = []
-    all_w_list = []
-
-    for g in graphs:
-        x0 = g["X"]
-        n_nodes = len(x0)
-        src, dst, norm_w = build_graph_operators(n_nodes, g["edge_u"], g["edge_v"], g["sp_pos"])
-        x1 = aggregate_neighbors(x0, n_nodes, src, dst, norm_w)
-        x2 = aggregate_neighbors(x1, n_nodes, src, dst, norm_w)
-        # Concatenate self (24) + 1-hop context (24) + 2-hop context (24) + diff (24) = 96 dims
-        x_multi = np.hstack([x0, x1, x2, x0 - x1]).astype(np.float32)
-
-        valid = g["valid_mask"]
-        if np.any(valid):
-            all_feat_list.append(x_multi[valid])
-            all_q_list.append(g["soft_q"][valid])
-            # Weight by superpoint purity * sqrt(superpoint P0 voxel count)
-            w = g["purity_weight"][valid] * np.sqrt(np.maximum(g["sp_counts"][valid], 1.0))
-            all_w_list.append(w.astype(np.float32))
-
-    X_train = np.vstack(all_feat_list)
-    Q_train = np.vstack(all_q_list)
-    W_train = np.concatenate(all_w_list)
-
-    # Feature standardization
-    feat_mean = X_train.mean(axis=0, keepdims=True).astype(np.float32)
-    feat_std = (X_train.std(axis=0, keepdims=True) + 1e-5).astype(np.float32)
-    X_norm = (X_train - feat_mean) / feat_std
-
-    # Inverse-frequency class balancing
-    class_totals = np.maximum(np.sum(Q_train * W_train[:, None], axis=0), 1.0)
-    class_weights = (np.sum(class_totals) / (3.0 * class_totals)).astype(np.float32)
-    class_weights = np.clip(class_weights, 0.5, 5.0)
-    sample_weights = W_train * np.sum(Q_train * class_weights[None, :], axis=1)
-    sample_weights /= np.maximum(sample_weights.mean(), 1e-6)
-
-    in_dim = X_norm.shape[1]
-    rng = np.random.default_rng(42)
-    W1 = (rng.standard_normal((in_dim, hidden_dim)) * np.sqrt(2.0 / in_dim)).astype(np.float32)
-    b1 = np.zeros((1, hidden_dim), dtype=np.float32)
-    W2 = (rng.standard_normal((hidden_dim, hidden_dim)) * np.sqrt(2.0 / hidden_dim)).astype(np.float32)
-    b2 = np.zeros((1, hidden_dim), dtype=np.float32)
-    W3 = (rng.standard_normal((hidden_dim, 3)) * np.sqrt(1.0 / hidden_dim)).astype(np.float32)
-    b3 = np.zeros((1, 3), dtype=np.float32)
-
-    params = [W1, b1, W2, b2, W3, b3]
-    m_adam = [np.zeros_like(p) for p in params]
-    v_adam = [np.zeros_like(p) for p in params]
-    beta1, beta2, eps = 0.9, 0.999, 1e-8
-
-    n_samples = len(X_norm)
-    for ep in range(1, epochs + 1):
-        # Forward pass
-        z1 = X_norm @ W1 + b1
-        h1 = relu(z1)
-        z2 = h1 @ W2 + b2
-        h2 = relu(z2) + h1  # Residual connection
-        logits = h2 @ W3 + b3
-        probs = softmax(logits)
-
-        # Purity-weighted soft cross-entropy / KL divergence loss
-        kl_loss = -np.sum(Q_train * np.log(np.maximum(probs, 1e-8)), axis=1)
-        loss = float(np.mean(sample_weights * kl_loss))
-
-        # Backward pass
-        dlogits = ((probs - Q_train) * sample_weights[:, None]) / n_samples
-        dW3 = h2.T @ dlogits + weight_decay * W3
-        db3 = np.sum(dlogits, axis=0, keepdims=True)
-
-        dh2 = dlogits @ W3.T
-        dz2 = dh2 * (z2 > 0)
-        dW2 = h1.T @ dz2 + weight_decay * W2
-        db2 = np.sum(dz2, axis=0, keepdims=True)
-
-        dh1 = dz2 @ W2.T + dh2
-        dz1 = dh1 * (z1 > 0)
-        dW1 = X_norm.T @ dz1 + weight_decay * W1
-        db1 = np.sum(dz1, axis=0, keepdims=True)
-
-        grads = [dW1, db1, dW2, db2, dW3, db3]
-        for idx, (p, g_val) in enumerate(zip(params, grads)):
-            m_adam[idx] = beta1 * m_adam[idx] + (1.0 - beta1) * g_val
-            v_adam[idx] = beta2 * v_adam[idx] + (1.0 - beta2) * (g_val * g_val)
-            m_hat = m_adam[idx] / (1.0 - beta1 ** ep)
-            v_hat = v_adam[idx] / (1.0 - beta2 ** ep)
-            p -= lr * m_hat / (np.sqrt(v_hat) + eps)
-
-        if ep == 1 or ep % 30 == 0 or ep == epochs:
-            pred_cls = np.argmax(probs, axis=1)
-            gt_cls = np.argmax(Q_train, axis=1)
-            acc = 100.0 * float(np.mean(pred_cls == gt_cls))
-            print(f"  [Epoch {ep:3d}/{epochs}] Purity-Weighted KL Loss: {loss:.4f} | Superpoint Acc: {acc:.2f}%")
-
-    return {
-        "feat_mean": feat_mean,
-        "feat_std": feat_std,
-        "W1": W1,
-        "b1": b1,
-        "W2": W2,
-        "b2": b2,
-        "W3": W3,
-        "b3": b3,
-    }
+def pipeline_fingerprint():
+    root = Path(__file__).resolve().parent
+    digest = hashlib.sha256()
+    for name in ("spt_filter.py", "spt_partition.py", "spt_learning.py", "train_spt_classifier.py",
+                 "src/spt_filter/spt_kernels.cpp", "build/libspt_kernels.so", "build/spt_cut_pursuit_build.json"):
+        digest.update((root/name).read_bytes())
+    return digest.hexdigest()
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Zero-Ground-Truth Superpoint GNN Self-Training & 3D CutMix Pipeline"
-    )
-    parser.add_argument(
-        "--interior-caves",
-        nargs="*",
-        default=["input/rupt.ply", "input/BaumeDeLongeaigue.ply", "input/diaclase.ply"],
-        help="Pure interior cave PLY files (100%% exact y=0 Cavern ground truth)",
-    )
-    parser.add_argument(
-        "--entrance-caves",
-        nargs="*",
-        default=["input/point-clouds_S11A_0257.ply"],
-        help="Entrance cave PLY files for confidence-masked pseudo-labeling (ignore_index=-100)",
-    )
-    parser.add_argument(
-        "--canopy-chunks",
-        nargs="*",
-        default=[],
-        help="Optional pure forest canopy PLY chunks cropped in CloudCompare for 3D CutMix",
-    )
-    parser.add_argument(
-        "--output-model",
-        type=Path,
-        default=Path("output/spt_gnn_classifier.npz"),
-        help="Output path for trained Superpoint GNN weights (.npz)",
-    )
-    parser.add_argument("--epochs", type=int, default=120, help="Training epochs")
+def cached_graph(cache_dir, metadata, producer):
+    key = hashlib.sha256(json.dumps(metadata, sort_keys=True).encode()).hexdigest()[:24]
+    path = Path(cache_dir)/f"{key}.npz"
+    if not path.exists():
+        result, histogram = producer()
+        save_graph(path, result, histogram, metadata)
+    else:
+        print(f"[Cache] {path}", flush=True)
+    return load_graph(path)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--manifest", type=Path)
+    parser.add_argument("--interior-caves", nargs="*", default=["input/rupt.ply", "input/BaumeDeLongeaigue.ply", "input/diaclase.ply"])
+    parser.add_argument("--entrance-caves", nargs="*", default=[])
+    parser.add_argument("--canopy-chunks", nargs="*", default=[])
+    parser.add_argument("--voxel-size", type=float, default=0.04)
+    parser.add_argument("--cutmix-per-cave", type=int, default=2)
+    parser.add_argument("--cache-dir", type=Path, default=Path("output/spt_graph_cache"))
+    parser.add_argument("--output-model", type=Path, default=Path("output/spt_graphsage.npz"))
+    parser.add_argument("--epochs", type=int, default=60)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
     args = parser.parse_args()
-
-    repo_root = Path(__file__).resolve().parent
-    lib = load_spt_kernels(repo_root / "build" / "libspt_kernels.so")
-
-    canopy_chunks_xyz = []
-    for c_path in args.canopy_chunks:
-        p = Path(c_path)
-        if p.exists():
-            c_xyz, _, _ = read_ply(p)
-            canopy_chunks_xyz.append(c_xyz)
-            print(f"[CutMix] Loaded pure canopy chunk: {p} ({len(c_xyz):,} pts)")
-
+    if args.epochs < 1 or args.cutmix_per_cave < 1 or args.voxel_size <= 0:
+        parser.error("epochs, cutmix-per-cave, and voxel-size must be positive")
+    if args.output_model.suffix != ".npz":
+        parser.error("output-model must have a .npz suffix; a .pt checkpoint is saved alongside it")
+    if args.manifest:
+        manifest = json.loads(args.manifest.read_text())
+        # Manifest-relative paths make an annotation folder portable.
+        for key in ("training", "canopy_chunks", "validation"):
+            for record in manifest.get(key, []):
+                for field in ("path", "source"):
+                    if field in record:
+                        record[field] = str((args.manifest.parent/record[field]).resolve())
+    else:
+        if args.canopy_chunks:
+            parser.error("Real canopy chunks require --manifest with explicit cave_system identities")
+        manifest = {
+            "training": [{"path": p, "cave_system": Path(p).stem, "role": role}
+                         for role, paths in (("interior", args.interior_caves), ("entrance", args.entrance_caves)) for p in paths],
+            "canopy_chunks": [{"path": p, "cave_system": Path(p).stem} for p in args.canopy_chunks],
+            "validation": [],
+        }
+    validate_splits(manifest)
+    for record in manifest["training"]+manifest.get("canopy_chunks", [])+manifest.get("validation", []):
+        for key in ("path", "source"):
+            if key in record and not Path(record[key]).is_file():
+                raise FileNotFoundError(record[key])
+    for record in manifest.get("validation", []):
+        label = record.get("label_field", "scalar_ground_truth")
+        names = {name for name, _ in inspect_ply_header(Path(record["path"]))[2]}
+        if label in ("scalar_predicted_class", "scalar_cave_zone", "scalar_pseudo_label") or label not in names:
+            raise ValueError(f"Validation requires a separate {label} annotation field in {record['path']}")
+    import torch
+    from spt_torch import train_graphs
+    # Set this before geometry too: importing PyTorch can change the shared
+    # OpenMP thread pool and otherwise slow the native WNNC solver substantially.
+    torch.set_num_threads(8)
+    device = "cuda" if args.device == "auto" and torch.cuda.is_available() else args.device
+    if device == "auto":
+        device = "cpu"
+    if device == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("CUDA requested but unavailable to this Python process")
+    root = Path(__file__).resolve().parent
+    lib = load_spt_kernels(root/"build/libspt_kernels.so")
+    canopy_records = manifest.get("canopy_chunks", [])
+    canopy = [read_ply(Path(record["path"]))[0] for record in canopy_records]
+    pipeline_id = pipeline_fingerprint()
     graphs = []
-    for i_idx, ic_str in enumerate(args.interior_caves):
-        p = Path(ic_str)
-        if not p.exists():
-            continue
-        print(f"[Phase 1 & 2] Processing pure interior cave {p.name} + generating 3D CutMix boundary graph...")
-        xyz_f64, _, _ = read_ply(p)
-        graphs.append(extract_pseudo_labeled_graph(lib, p, voxel_size=0.04, is_pure_interior=True))
-        graphs.append(
-            generate_cutmix_superpoint_graph(
-                lib, xyz_f64, canopy_chunks_xyz, voxel_size=0.04, seed=42 + i_idx
-            )
-        )
-
-    for ec_str in args.entrance_caves:
-        p = Path(ec_str)
-        if not p.exists():
-            continue
-        print(f"[Phase 1] Extracting confidence-masked pseudo-labels (ignore_index=-100) from {p.name}...")
-        graphs.append(extract_pseudo_labeled_graph(lib, p, voxel_size=0.04, is_pure_interior=False))
-
-    if len(graphs) == 0:
-        raise RuntimeError("No valid training cave scans found.")
-
-    tot_sp = sum(len(g["X"]) for g in graphs)
-    valid_sp = sum(int(np.sum(g["valid_mask"])) for g in graphs)
-    print(
-        f"\n[Part 3 - Option A] Training 2-Layer Superpoint GraphSAGE + MLP Classifier "
-        f"on {len(graphs)} graphs ({valid_sp:,}/{tot_sp:,} unmasked P1 superpoints)..."
-    )
-    t0 = time.perf_counter()
-    model_weights = train_superpoint_gnn(graphs, epochs=args.epochs)
-    t_train = time.perf_counter() - t0
-
+    for case_index, case in enumerate(manifest["training"]):
+        path = Path(case["path"])
+        source_path = Path(case["source"]) if "source" in case else None
+        label_field = case.get("label_field", "scalar_ground_truth")
+        already_p0 = bool(case.get("already_p0", False))
+        spacing = float(case.get("voxel_size", args.voxel_size))
+        metadata = {"schema": SCHEMA, "pipeline": pipeline_id, "source": source_fingerprint(path),
+                    "cave_system": case["cave_system"], "role": case["role"], "voxel_size": spacing,
+                    "already_p0": already_p0}
+        if source_path is not None:
+            metadata["full_source"] = source_fingerprint(source_path)
+        print(f"[Seeds] {path.name} ({case['role']})", flush=True)
+        graphs.append(cached_graph(args.cache_dir, metadata,
+                      lambda p=path, sp=source_path, s=spacing, r=case["role"], lf=label_field, ap0=already_p0:
+                      extract_pseudo_labeled_graph(lib, p, s, r == "interior", sp, lf, ap0)))
+        if case["role"] == "interior":
+            xyz = None
+            for i in range(args.cutmix_per_cave):
+                scenario = "mouth" if i % 2 == 0 else "skylight"
+                seed = args.seed+case_index*100+i
+                mix_metadata = {**metadata, "role": "cutmix", "scenario": scenario, "seed": seed,
+                                "canopy_sources": [source_fingerprint(r["path"]) for r in canopy_records]}
+                def produce(p=path, s=spacing, sd=seed, sc=scenario, lf=label_field):
+                    nonlocal xyz
+                    if xyz is None:
+                        pts, _, flds = read_ply(p)
+                        xyz = pts[flds[lf] == 0] if lf in flds else pts
+                    return generate_cutmix_superpoint_graph(lib, xyz, canopy, s, sd, sc)
+                print(f"[CutMix] {path.name}, {scenario}, seed={seed}", flush=True)
+                graphs.append(cached_graph(args.cache_dir, mix_metadata, produce))
+    started = time.perf_counter()
+    model = train_graphs(graphs, epochs=args.epochs, device=device, seed=args.seed)
     args.output_model.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(args.output_model, **model_weights)
-    print(f"[Done] Trained in {t_train:.2f}s -> Saved portable GNN weights to {args.output_model}")
+    training_groups = sorted({cave_system_id(r["cave_system"]) for r in manifest["training"]+canopy_records})
+    metadata = {"training_groups": training_groups, "pipeline": pipeline_id, "voxel_size": args.voxel_size,
+                "epochs": args.epochs, "seed": args.seed, "device": device,
+                "graphs": [g["metadata"] for g in graphs]}
+    model.export(args.output_model, graphs[0]["feature_names"], metadata)
+    torch.save({"state_dict": model.cpu().state_dict(), "metadata": metadata,
+                "feature_names": graphs[0]["feature_names"].tolist()}, args.output_model.with_suffix(".pt"))
+    print(f"[Saved] {args.output_model}, training {time.perf_counter()-started:.2f}s on {device}")
+    if manifest.get("validation"):
+        from evaluate_spt_classifier import evaluate_manifest
+        report = evaluate_manifest(lib, manifest["validation"], args.output_model, args.voxel_size)
+        report_path = args.output_model.with_suffix(".validation.json")
+        report_path.write_text(json.dumps(report, indent=2)+"\n")
+        print(f"[Held-out validation] {report_path}")
+    else:
+        print("[Validation] No real held-out labels supplied; training loss is not an accuracy estimate.")
 
 
 if __name__ == "__main__":

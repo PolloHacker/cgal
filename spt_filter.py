@@ -13,6 +13,7 @@ Implements Stages 1-6 from docs/spt-superpoint-vegetation-filtering-plan.md:
 import argparse
 import ctypes
 import os
+import json
 import sys
 import time
 from pathlib import Path
@@ -23,6 +24,10 @@ from scipy import sparse
 from scipy.sparse import csgraph
 from scipy.spatial import cKDTree
 
+from spt_partition import partition_hierarchy
+from spt_learning import (apply_model, class_histograms, radius_component_labels,
+                          save_graph, superpoint_features)
+
 
 # -----------------------------------------------------------------------------
 # C++ OpenMP/Eigen3 Shared Library Binding
@@ -32,7 +37,17 @@ def load_spt_kernels(so_path: Path) -> ctypes.CDLL:
         raise FileNotFoundError(
             f"Shared library {so_path} not found. Compile src/spt_filter/spt_kernels.cpp first."
         )
+    source = Path(__file__).resolve().parent / "src/spt_filter/spt_kernels.cpp"
+    if source.exists() and source.stat().st_mtime_ns > so_path.stat().st_mtime_ns:
+        raise RuntimeError("SPT shared library predates its source. Rebuild: "
+                           "cmake --build build --target spt_kernels -j 8")
     lib = ctypes.CDLL(str(so_path))
+    try:
+        lib.spt_kernel_abi_version.restype = ctypes.c_int32
+        if lib.spt_kernel_abi_version() != 2:
+            raise AttributeError("incompatible kernel ABI")
+    except AttributeError as exc:
+        raise RuntimeError("Rebuild the SPT kernels: cmake --build build --target spt_kernels -j 8") from exc
 
     f32_p = ctypes.POINTER(ctypes.c_float)
     i32_p = ctypes.POINTER(ctypes.c_int32)
@@ -43,7 +58,7 @@ def load_spt_kernels(so_path: Path) -> ctypes.CDLL:
     lib.spt_voxel_subsample.restype = ctypes.c_int32
 
     lib.spt_compute_scale_features.argtypes = [
-        f32_p, f32_p, ctypes.c_int32, ctypes.c_float, ctypes.c_int32, f32_p
+        f32_p, f32_p, ctypes.c_int32, ctypes.c_float, ctypes.c_int32, ctypes.c_int32, f32_p
     ]
     lib.spt_compute_scale_features.restype = None
 
@@ -52,12 +67,10 @@ def load_spt_kernels(so_path: Path) -> ctypes.CDLL:
     ]
     lib.spt_compute_enclosure.restype = None
 
-    lib.spt_partition_superpoints.argtypes = [
-        f32_p, f32_p, f32_p, f32_p, ctypes.c_int32, ctypes.c_int32,
-        ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float,
-        ctypes.c_int32, i32_p
+    lib.spt_build_partition_graph.argtypes = [
+        f32_p, f32_p, f32_p, ctypes.c_int32, ctypes.c_float, i32_p, f32_p
     ]
-    lib.spt_partition_superpoints.restype = ctypes.c_int32
+    lib.spt_build_partition_graph.restype = None
 
     lib.spt_build_superpoint_graph.argtypes = [
         f32_p, i32_p, ctypes.c_int32, ctypes.c_int32,
@@ -199,7 +212,24 @@ def stream_subsample_ply(
 
     chunk_p0_xyz_list = []
     chunk_p0_norm_list = []
-    centroid_f64 = None
+    # Use the same global float64 center and voxel origin for every chunk.
+    # A first-chunk center or per-chunk grid origin makes P0 depend on file ordering.
+    coordinate_sum = np.zeros(3, dtype=np.float64)
+    with open(filepath, "rb") as f:
+        f.seek(data_offset)
+        remaining = num_vertices
+        while remaining:
+            raw = np.fromfile(f, dtype=dtype, count=min(chunk_size, remaining))
+            if len(raw) == 0:
+                raise ValueError(f"Truncated vertex data in {filepath}")
+            for d, name in enumerate(("x", "y", "z")):
+                if not np.isfinite(raw[name]).all():
+                    raise ValueError(f"Non-finite {name} coordinates in {filepath}")
+                coordinate_sum[d] += np.sum(raw[name], dtype=np.float64)
+            remaining -= len(raw)
+    if num_vertices == 0:
+        raise ValueError("Cannot process an empty point cloud")
+    centroid_f64 = (coordinate_sum / num_vertices)[None, :]
 
     p0_idx_buf = np.empty(chunk_size, dtype=np.int32)
     orig_to_p0_buf = np.empty(chunk_size, dtype=np.int32)
@@ -215,16 +245,6 @@ def stream_subsample_ply(
                 break
             remaining -= len(raw)
             chunk_id += 1
-
-            if centroid_f64 is None:
-                centroid_f64 = np.array(
-                    [[
-                        float(np.mean(raw["x"], dtype=np.float64)),
-                        float(np.mean(raw["y"], dtype=np.float64)),
-                        float(np.mean(raw["z"], dtype=np.float64)),
-                    ]],
-                    dtype=np.float64,
-                )
 
             c_xyz = np.empty((len(raw), 3), dtype=np.float32)
             c_xyz[:, 0] = (raw["x"].astype(np.float64) - centroid_f64[0, 0]).astype(np.float32)
@@ -462,12 +482,13 @@ def run_spt_pipeline_from_p0(
     orig_to_p0: Optional[np.ndarray] = None,
     t_stage1: float = 0.0,
     voxel_size: float = 0.04,
-    r_fine: float = 0.12,
+    r_fine: float = 0.15,
     r_coarse: float = 0.50,
     p1_reg: float = 0.015,
     p1_cutoff: int = 3,
     p2_reg: float = 0.08,
     p2_cutoff: int = 15,
+    pure_interior: bool = False,
 ) -> Dict[str, np.ndarray]:
     t1 = time.perf_counter()
     num_p0 = len(p0_xyz)
@@ -490,10 +511,9 @@ def run_spt_pipeline_from_p0(
     t_wnnc = time.perf_counter()
 
     # --- Stage 2B & 3A: Decoupled Partition vs. Classification Multi-Scale Features ---
-    # Part 1.1 Fix: Keep r_fine_eff tight (2.85 * d_0) so local covariance spheres do not blur
-    # across the cave-wall / overhanging-bush drip-line transition during Stage 4 cut-pursuit.
-    # Reserve the wide 10.0 * d_0 coarse sphere strictly for Stage 3 enclosure & Stage 5 scoring.
-    r_fine_eff = max(r_fine, voxel_size * 2.85)
+    # Classification may use larger neighborhoods; partitioning below has its own
+    # strict 2.85*d0 radius with no sparse-neighborhood expansion or WNNC blending.
+    r_fine_eff = max(r_fine, voxel_size * 3.75)
     r_coarse_eff = max(r_coarse, voxel_size * 10.0)
     occ_cell_eff = max(0.20, voxel_size * 4.0)
 
@@ -506,6 +526,7 @@ def run_spt_pipeline_from_p0(
         ctypes.c_int32(num_p0),
         ctypes.c_float(r_fine_eff),
         ctypes.c_int32(1),
+        ctypes.c_int32(1),
         fine_feats.ctypes.data_as(f32_p),
     )
 
@@ -515,6 +536,7 @@ def run_spt_pipeline_from_p0(
         ctypes.c_int32(num_p0),
         ctypes.c_float(r_coarse_eff),
         ctypes.c_int32(0),
+        ctypes.c_int32(1),
         coarse_feats.ctypes.data_as(f32_p),
     )
     t2 = time.perf_counter()
@@ -544,77 +566,28 @@ def run_spt_pipeline_from_p0(
     verticality = 1.0 - horizontality
     t3 = time.perf_counter()
 
-    # --- Stage 4: Contrast-Sensitive Hierarchical l0-Cut Pursuit (P0 -> P1 -> P2) ---
-    # Part 1.1 & 1.2 Fixes:
-    #   1. Decouple partition features from coarse classification features (exclude coarse_feats
-    #      from part_feats so 1m+ spheres never blur boundaries across the drip line).
-    #   2. Lower weight of signed_horizontality from 1.2 to 0.35 so vertical tree trunks and
-    #      entrance slopes (|nz| ~ 0) do not merge into vertical cave walls.
-    #   3. Increase weight of unsmoothed fine normal dispersion (1.5) and fine scattering (1.5).
-    #   4. Prune k-NN edges > 3.5 * d_0, weight edges by normal & dispersion contrast, and
-    #      over-segment P1 with pcp_cutoff=[3, 15], pcp_regularization=[0.015, 0.08].
-    part_feats = np.column_stack([
-        fine_feats[:, 1] * 1.0,       # planarity_fine [0, 1]
-        fine_feats[:, 2] * 1.5,       # scattering_fine [0, 1.5]
-        fine_feats[:, 3] * 1.0,       # linearity_fine [0, 1]
-        fine_feats[:, 0] * 3.0,       # rugosity_fine scaled to [0, 1]
-        fine_feats[:, 5] * 1.5,       # normal_dispersion_fine [0, 1.5]
-        verticality * 0.5,            # verticality [0, 0.5]
-        signed_horizontality * 0.35,  # signed_horizontality [-0.35, +0.35]
-        roof_occlusion * 0.7,         # rock roof occlusion [0, 0.7]
-        foliage_above * 0.8,          # overhead foliage canopy shielding [0, 0.8]
-    ]).astype(np.float32)
-    part_feats = np.ascontiguousarray(part_feats, dtype=np.float32)
-    ndisp_fine_contig = np.ascontiguousarray(fine_feats[:, 5], dtype=np.float32)
-
-    p1_labels = np.empty(num_p0, dtype=np.int32)
-    num_p1 = lib.spt_partition_superpoints(
-        p0_xyz.ctypes.data_as(f32_p),
-        p0_normals.ctypes.data_as(f32_p),
-        ndisp_fine_contig.ctypes.data_as(f32_p),
-        part_feats.ctypes.data_as(f32_p),
-        ctypes.c_int32(num_p0),
-        ctypes.c_int32(part_feats.shape[1]),
-        ctypes.c_float(max(voxel_size * 4.0, 0.15)),
-        ctypes.c_float(voxel_size * 3.5),
-        ctypes.c_float(p1_reg),
-        ctypes.c_float(0.02),
-        ctypes.c_int32(p1_cutoff),
-        p1_labels.ctypes.data_as(i32_p),
+    # --- Stage 4: Fine-only boundary features and nested upstream l0 cut-pursuit ---
+    partition_normals = p0_normals.copy()
+    partition_features = np.empty((num_p0, 6), dtype=np.float32)
+    lib.spt_compute_scale_features(
+        p0_xyz.ctypes.data_as(f32_p), partition_normals.ctypes.data_as(f32_p),
+        num_p0, 2.85 * voxel_size, 2, 0, partition_features.ctypes.data_as(f32_p),
     )
-
-    p2_labels = np.empty(num_p0, dtype=np.int32)
-    num_p2 = lib.spt_partition_superpoints(
-        p0_xyz.ctypes.data_as(f32_p),
-        p0_normals.ctypes.data_as(f32_p),
-        ndisp_fine_contig.ctypes.data_as(f32_p),
-        part_feats.ctypes.data_as(f32_p),
-        ctypes.c_int32(num_p0),
-        ctypes.c_int32(part_feats.shape[1]),
-        ctypes.c_float(max(voxel_size * 7.0, 0.28)),
-        ctypes.c_float(voxel_size * 6.0),
-        ctypes.c_float(p2_reg),
-        ctypes.c_float(0.008),
-        ctypes.c_int32(p2_cutoff),
-        p2_labels.ctypes.data_as(i32_p),
+    part_feats = np.ascontiguousarray(np.column_stack([
+        partition_features[:, 1], 1.5 * partition_features[:, 2],
+        partition_features[:, 3], 3.0 * partition_features[:, 0],
+        1.5 * partition_features[:, 5],
+        0.35 * partition_normals[:, 2],
+        0.7 * roof_occlusion, 0.8 * foliage_above,
+    ]), dtype=np.float32)
+    p1_labels, p2_labels, p1_to_p2, edge_u, edge_v = partition_hierarchy(
+        lib, p0_xyz, partition_normals,
+        np.ascontiguousarray(partition_features[:, 5]), part_feats, voxel_size,
+        p1_reg, p1_cutoff, p2_reg, p2_cutoff,
     )
-
-    # Build P1 Superpoint Boundary Adjacency Graph
-    max_edges = num_p1 * 30 + 10000
-    edge_u = np.empty(max_edges, dtype=np.int32)
-    edge_v = np.empty(max_edges, dtype=np.int32)
-    num_edges = lib.spt_build_superpoint_graph(
-        p0_xyz.ctypes.data_as(f32_p),
-        p1_labels.ctypes.data_as(i32_p),
-        ctypes.c_int32(num_p0),
-        ctypes.c_int32(num_p1),
-        ctypes.c_float(max(voxel_size * 5.0, 0.20)),
-        ctypes.c_int32(max_edges),
-        edge_u.ctypes.data_as(i32_p),
-        edge_v.ctypes.data_as(i32_p),
-    )
-    edge_u = edge_u[:num_edges]
-    edge_v = edge_v[:num_edges]
+    num_p1 = int(p1_labels.max()) + 1
+    num_p2 = int(p2_labels.max()) + 1
+    num_edges = len(edge_u)
     t4 = time.perf_counter()
 
     # --- Stage 5: Superpoint Graph Scoring, Drip-Line Descriptors & Geodesic Filtering ---
@@ -657,10 +630,7 @@ def run_spt_pipeline_from_p0(
     p2_foliage_above = (np.bincount(p2_labels, weights=foliage_above, minlength=num_p2) * p2_inv).astype(np.float32)
     p2_plan_coarse = (np.bincount(p2_labels, weights=coarse_feats[:, 1], minlength=num_p2) * p2_inv).astype(np.float32)
     p2_ndisp_coarse = (np.bincount(p2_labels, weights=coarse_feats[:, 5], minlength=num_p2) * p2_inv).astype(np.float32)
-    # Map each P1 superpoint to its primary P2 parent via representative P0 voxel
-    p1_rep_p0 = np.zeros(num_p1, dtype=np.int32)
-    p1_rep_p0[p1_labels] = np.arange(num_p0, dtype=np.int32)
-    p1_to_p2 = p2_labels[p1_rep_p0]
+    # Every P1 belongs to exactly one P2 by construction.
     sp_p2_roof_occ = p2_roof_occ[p1_to_p2]
     sp_p2_foliage_above = p2_foliage_above[p1_to_p2]
     sp_p2_plan_coarse = p2_plan_coarse[p1_to_p2]
@@ -743,23 +713,11 @@ def run_spt_pipeline_from_p0(
         & (sp_counts >= max(3, p1_cutoff))
     )
     drip_cand_idx = np.where(raw_drip_anchor)[0]
-    if len(drip_cand_idx) > 0:
-        drip_tree_xy = cKDTree(sp_pos[drip_cand_idx, :2])
-        d_pairs = drip_tree_xy.query_pairs(r=5.0, output_type="ndarray")
-        if len(d_pairs) > 0:
-            du = drip_cand_idx[d_pairs[:, 0]]
-            dv = drip_cand_idx[d_pairs[:, 1]]
-            d_adj = sparse.csr_matrix(
-                (np.ones(2 * len(du), dtype=np.int32), (np.concatenate([du, dv]), np.concatenate([dv, du]))),
-                shape=(num_p1, num_p1),
-            )
-            n_dc, d_cl = csgraph.connected_components(d_adj, directed=False)
-            d_comp_p0 = np.bincount(d_cl, weights=sp_counts * raw_drip_anchor, minlength=n_dc)
-            valid_drip_anchor = raw_drip_anchor & (d_comp_p0[d_cl] >= max(500.0, 0.08 * float(d_comp_p0.max())))
-        else:
-            valid_drip_anchor = raw_drip_anchor
-    else:
-        valid_drip_anchor = raw_drip_anchor
+    valid_drip_anchor = np.zeros(num_p1, dtype=bool)
+    if len(drip_cand_idx):
+        components = radius_component_labels(sp_pos[drip_cand_idx, :2], 5.0)
+        sizes = np.bincount(components, weights=sp_counts[drip_cand_idx])
+        valid_drip_anchor[drip_cand_idx] = sizes[components] >= max(500.0, 0.08*float(sizes.max()))
 
     drip_anchor_idx = np.where(valid_drip_anchor)[0]
     if len(drip_anchor_idx) == 0:
@@ -769,17 +727,35 @@ def run_spt_pipeline_from_p0(
         drip_xy_tree = cKDTree(sp_pos[drip_anchor_idx, :2])
         sp_d_drip_f64, nearest_drip_i = drip_xy_tree.query(sp_pos[:, :2], k=1)
         sp_d_drip = sp_d_drip_f64.astype(np.float32)
-        # Local lowest floor elevation z_rel from enclosed floor anchors
+        # Lowest elevation among nearby enclosed floor anchors, rather than
+        # selecting an arbitrary nearest anchor in a sloping/multi-level conduit.
         floor_anchor_idx = drip_anchor_idx[sp_nz[drip_anchor_idx] > 0.20]
         if len(floor_anchor_idx) > 0:
             floor_xy_tree = cKDTree(sp_pos[floor_anchor_idx, :2])
-            _, nearest_fl_i = floor_xy_tree.query(sp_pos[:, :2], k=1)
-            sp_z_rel = (sp_pos[:, 2] - sp_pos[floor_anchor_idx[nearest_fl_i], 2]).astype(np.float32)
+            fd, fi = floor_xy_tree.query(sp_pos[:, :2], k=min(16, len(floor_anchor_idx)))
+            fd, fi = fd.reshape(num_p1, -1), fi.reshape(num_p1, -1)
+            nearby = fd <= np.maximum(3.0, fd[:, :1] + voxel_size)
+            local_floor = np.min(np.where(nearby, sp_pos[floor_anchor_idx[fi], 2], np.inf), axis=1)
+            sp_z_rel = (sp_pos[:, 2] - local_floor).astype(np.float32)
         else:
-            sp_z_rel = (sp_pos[:, 2] - sp_pos[drip_anchor_idx[nearest_drip_i], 2]).astype(np.float32)
+            sp_z_rel = np.zeros(num_p1, dtype=np.float32)
     else:
         sp_d_drip = np.zeros(num_p1, dtype=np.float32)
         sp_z_rel = np.zeros(num_p1, dtype=np.float32)
+
+    # Compare with nearby coherent ceiling surfaces, not an absolute Z threshold.
+    # Exterior trees can project onto the conduit in XY while still being above it.
+    ceiling_anchors = np.flatnonzero(is_ceiling_overhang)
+    sp_above_roof = np.zeros(num_p1, dtype=np.float32)
+    roof_anchor_known = np.zeros(num_p1, dtype=bool)
+    if len(ceiling_anchors):
+        ceiling_tree = cKDTree(sp_pos[ceiling_anchors, :2])
+        cd, ci = ceiling_tree.query(sp_pos[:, :2], k=min(16, len(ceiling_anchors)))
+        cd, ci = cd.reshape(num_p1, -1), ci.reshape(num_p1, -1)
+        local = cd <= np.maximum(2.0, cd[:, :1] + 2*voxel_size)
+        height = np.max(np.where(local, sp_pos[ceiling_anchors[ci], 2], -np.inf), axis=1)
+        roof_anchor_known = cd[:, 0] <= 20.0
+        sp_above_roof[roof_anchor_known] = (sp_pos[:, 2]-height)[roof_anchor_known]
 
     # 4. Candidate Open-Sky Vegetation Canopy Superpoints:
     raw_canopy_mask = (
@@ -818,25 +794,21 @@ def run_spt_pipeline_from_p0(
     validated_canopy_mask = np.zeros(num_p1, dtype=bool)
     cand_indices = np.where(raw_veg_support_mask)[0]
     if np.any(raw_canopy_mask) and len(cand_indices) > 0:
-        cand_tree = cKDTree(sp_pos[cand_indices])
-        pairs = cand_tree.query_pairs(r=3.5, output_type="ndarray")
-        if len(pairs) > 0:
-            u_c = cand_indices[pairs[:, 0]]
-            v_c = cand_indices[pairs[:, 1]]
-            sub_adj = sparse.csr_matrix(
-                (np.ones(2 * len(u_c), dtype=np.int32), (np.concatenate([u_c, v_c]), np.concatenate([v_c, u_c]))),
-                shape=(num_p1, num_p1),
-            )
-            n_comp, comp_labels = csgraph.connected_components(sub_adj, directed=False)
-        else:
-            n_comp = num_p1
-            comp_labels = np.arange(num_p1, dtype=np.int32)
-        comp_p0_sizes = np.bincount(comp_labels, weights=sp_counts * raw_veg_support_mask, minlength=n_comp)
-        comp_canopy_p0 = np.bincount(comp_labels, weights=sp_counts * raw_canopy_mask, minlength=n_comp)
-        comp_max_vault_dist = np.zeros(n_comp, dtype=np.float32)
-        np.maximum.at(comp_max_vault_dist, comp_labels[cand_indices], dist_to_vault[cand_indices])
-        valid_comps = (comp_p0_sizes >= 500) & (comp_canopy_p0 >= 300) & (comp_max_vault_dist > 4.5)
-        validated_canopy_mask = raw_canopy_mask & valid_comps[comp_labels]
+        components = radius_component_labels(sp_pos[cand_indices], 3.5)
+        nc = int(components.max())+1
+        counts = sp_counts[cand_indices]
+        canopy_counts = counts*raw_canopy_mask[cand_indices]
+        comp_sizes = np.bincount(components, weights=counts, minlength=nc)
+        comp_canopy = np.bincount(components, weights=canopy_counts, minlength=nc)
+        max_vault = np.zeros(nc, dtype=np.float32)
+        max_drip = np.zeros(nc, dtype=np.float32)
+        np.maximum.at(max_vault, components, dist_to_vault[cand_indices])
+        np.maximum.at(max_drip, components, sp_d_drip[cand_indices])
+        above = roof_anchor_known[cand_indices] & (sp_above_roof[cand_indices] > 3.0)
+        comp_above = np.bincount(components, weights=canopy_counts*above, minlength=nc)
+        exterior_evidence = (max_drip > 4.5) | (comp_above > 0.5*comp_canopy)
+        valid = (comp_sizes >= 500) & (comp_canopy >= 300) & (max_vault > 4.5) & exterior_evidence
+        validated_canopy_mask[cand_indices] = raw_canopy_mask[cand_indices] & valid[components]
 
     canopy_seeds = np.where(validated_canopy_mask)[0]
     if len(canopy_seeds) > 0:
@@ -961,64 +933,18 @@ def run_spt_pipeline_from_p0(
     sp_cave_zone[sp_pred_class == 1] = 3
     sp_cave_zone[sp_pred_class == 2] = 4
 
-    # Phase 1 Confidence-Masked Pseudo-Labels for Zero-Ground-Truth Self-Training (Part 2.1):
-    #   0 = High-confidence Cavern seed
-    #   1 = High-confidence Vegetation seed
-    #   2 = High-confidence Exterior Ground seed
-    # -100 = Ambiguous drip-line transition zone (ignore_index in Cross-Entropy / Lovasz)
+    # Phase 1 Supervision Target:
+    # Heuristic seed generation is disabled in training so Stage 5 heuristic errors
+    # never leak into the learned classifier. Only explicit pure-interior scans receive 0;
+    # all other scans remain -100 unless explicit external/manual annotations are supplied.
     sp_pseudo_label = np.full(num_p1, -100, dtype=np.int32)
-    if len(canopy_seeds) == 0:
-        # Pure interior scan: 100% of superpoints are high-confidence Cavern seeds (y = 0)
+    if pure_interior:
         sp_pseudo_label[:] = 0
-    else:
-        hc_cavern = (
-            (sp_pred_class == 0)
-            & ((sp_roof_occ > 0.45) | (is_ceiling_overhang & (sp_d_drip < 1.5)))
-            & (sp_foliage_above < 0.20)
-            & (sp_d_drip < 2.0)
-        )
-        hc_veg = (
-            validated_canopy_mask
-            & (sp_roof_occ < 0.05)
-            & ((sp_scat_fine > 0.25) | (sp_ndisp_fine > 0.38))
-        )
-        hc_ext_ground = (
-            is_ext_ground_sp
-            & (sp_roof_occ < 0.05)
-            & (sp_nz > 0.50)
-            & (sp_d_drip > 5.0)
-        )
-        sp_pseudo_label[hc_cavern] = 0
-        sp_pseudo_label[hc_veg] = 1
-        sp_pseudo_label[hc_ext_ground] = 2
 
-    # Assemble 24-dim P1 Superpoint Feature Matrix X_P1 (for Option A GAT/GraphSAGE + MLP Classifier)
-    sp_feature_matrix = np.column_stack([
-        sp_rug_fine,
-        sp_plan_fine,
-        sp_scat_fine,
-        sp_lin_fine,
-        sp_ndisp_fine,
-        sp_std_plan_fine,
-        sp_std_ndisp_fine,
-        sp_rug_coarse,
-        sp_plan_coarse,
-        sp_scat_coarse,
-        sp_ndisp_coarse,
-        sp_nz,
-        sp_vert,
-        sp_up_occ,
-        sp_roof_occ,
-        sp_down_occ,
-        sp_enclosure,
-        sp_foliage_above,
-        np.tanh(sp_d_drip / 10.0),
-        np.tanh(sp_z_rel / 10.0),
-        sp_p2_roof_occ,
-        sp_p2_foliage_above,
-        sp_p2_plan_coarse,
-        sp_p2_ndisp_coarse,
-    ]).astype(np.float32)
+    sp_feature_matrix, feature_names = superpoint_features(
+        p1_labels, p2_labels, p0_xyz, p0_normals, fine_feats, coarse_feats,
+        enclosure_feats, sp_d_drip, sp_z_rel, sp_above_roof, roof_anchor_known,
+    )
 
     t5 = time.perf_counter()
 
@@ -1042,6 +968,10 @@ def run_spt_pipeline_from_p0(
     )
 
     return {
+        "voxel_size": float(voxel_size),
+        "timings": {"subsample": t_stage1, "wnnc": t_wnnc-t1, "features": t2-t_wnnc,
+                    "enclosure": t3-t2, "partition": t4-t3, "scoring": t5-t4,
+                    "total": t_stage1+t5-t1},
         "centroid_f64": centroid_f64,
         "p0_to_orig": p0_to_orig,
         "orig_to_p0": orig_to_p0,
@@ -1077,6 +1007,10 @@ def run_spt_pipeline_from_p0(
         "num_p1": num_p1,
         "num_p2": num_p2,
         "sp_feature_matrix": sp_feature_matrix,
+        "feature_names": feature_names,
+        "p1_to_p2": p1_to_p2,
+        "above_roof": sp_above_roof[p1_labels],
+        "sp_cave_zone": sp_cave_zone,
         "sp_pseudo_label": sp_pseudo_label,
         "sp_pred_class": sp_pred_class,
         "sp_counts": sp_counts,
@@ -1091,15 +1025,20 @@ def run_spt_pipeline(
     xyz_f64: np.ndarray,
     normals_in: Optional[np.ndarray],
     voxel_size: float = 0.04,
-    r_fine: float = 0.12,
+    r_fine: float = 0.15,
     r_coarse: float = 0.50,
     p1_reg: float = 0.015,
     p1_cutoff: int = 3,
     p2_reg: float = 0.08,
     p2_cutoff: int = 15,
+    pure_interior: bool = False,
 ) -> Dict[str, np.ndarray]:
     t0 = time.perf_counter()
     n_orig = len(xyz_f64)
+    if n_orig < 4 or xyz_f64.shape != (n_orig, 3) or not np.isfinite(xyz_f64).all():
+        raise ValueError("Expected at least four finite XYZ points")
+    if voxel_size <= 0 or r_fine <= 0 or r_coarse <= 0:
+        raise ValueError("Voxel size and feature radii must be positive")
 
     centroid_f64 = xyz_f64.mean(axis=0, keepdims=True)
     xyz_centered = np.ascontiguousarray(xyz_f64 - centroid_f64, dtype=np.float32)
@@ -1142,6 +1081,7 @@ def run_spt_pipeline(
         p1_cutoff=p1_cutoff,
         p2_reg=p2_reg,
         p2_cutoff=p2_cutoff,
+        pure_interior=pure_interior,
     )
 
 
@@ -1153,11 +1093,13 @@ def run_cutmix_stress_test(
     xyz_f64: np.ndarray,
     normals_in: Optional[np.ndarray],
     voxel_size: float = 0.04,
-) -> None:
+    model_path: Optional[Path] = None,
+    model_min_confidence: float = 0.0,
+) -> Dict[str, float]:
     """
     Grafts synthetic 3D trees (cylindrical trunks + high-entropy leaf canopies) and
-    exterior terrain outside the entrance of the cave, plus a complex internal speleothem
-    cluster deep inside the cave, and evaluates P1 Oracle mIoU and Classification IoU.
+    exterior terrain outside the entrance of the cave, and evaluates original-point
+    P1 oracle IoU and classification IoU. The training generator also opens mouths/skylights.
     """
     rng = np.random.default_rng(42)
     min_pt = xyz_f64.min(axis=0)
@@ -1236,10 +1178,13 @@ def run_cutmix_stress_test(
     print("\n" + "=" * 78)
     print("[3D CutMix Stress Test] Running on Cave + Grafted Trees + Exterior Ground...")
     res = run_spt_pipeline(lib, comb_xyz, comb_normals, voxel_size=voxel_size)
+    if model_path:
+        apply_model(res, model_path, model_min_confidence)
 
-    p0_gt = comb_gt[res["p0_to_orig"]]
-    p0_pred = res["predicted_class"]
-    p1_labels = res["superpoint_p1"]
+    # Evaluate original point labels, including mixed-label P0 voxels.
+    p0_gt = comb_gt
+    p0_pred = res["predicted_class"][res["orig_to_p0"]]
+    p1_labels = res["superpoint_p1"][res["orig_to_p0"]]
     num_p1 = res["num_p1"]
 
     # Compute P1 Superpoint Oracle IoU on Binary Cavern vs Non-Cavern
@@ -1271,6 +1216,8 @@ def run_cutmix_stress_test(
     print(f"  Unsupervised Filter Cavern IoU  : {cavern_iou:.2f}%")
     print(f"  Unsupervised Filter Remove IoU  : {remove_iou:.2f}%")
     print("=" * 78 + "\n")
+    return {"oracle_cavern_iou": oracle_cavern_iou, "precision": precision,
+            "recall": recall, "cavern_iou": cavern_iou, "remove_iou": remove_iou}
 
 
 def main() -> None:
@@ -1293,7 +1240,17 @@ def main() -> None:
     parser.add_argument(
         "--stress-test", action="store_true", help="Run 3D CutMix entrance vegetation stress test"
     )
+    parser.add_argument("--pure-interior", action="store_true", help="Explicitly designate this scan as pure cavern for pseudo-label export")
+    parser.add_argument("--model", type=Path, help="Portable GraphSAGE .npz model; replaces heuristic semantic predictions")
+    parser.add_argument("--model-min-confidence", type=float, default=0.0, help="Keep heuristic labels where model softmax confidence is below this value")
+    parser.add_argument("--export-graph", type=Path, help="Save P1 features, adjacency, and masked seed histograms")
+    parser.add_argument("--diagnostic-only", action="store_true", help="Skip the full-resolution cleaned-cloud export")
+    parser.add_argument("--report-json", type=Path, help="Save timings and class counts")
     args = parser.parse_args()
+    if any(not np.isfinite(v) or v <= 0 for v in (args.voxel_size, args.r_fine, args.r_coarse)):
+        parser.error("Voxel size and feature radii must be finite and positive")
+    if not 0 <= args.model_min_confidence <= 1:
+        parser.error("model-min-confidence must be in [0, 1]")
 
     repo_root = Path(__file__).resolve().parent
     so_path = repo_root / "build" / "libspt_kernels.so"
@@ -1326,6 +1283,7 @@ def main() -> None:
             voxel_size=args.voxel_size,
             r_fine=args.r_fine,
             r_coarse=args.r_coarse,
+            pure_interior=args.pure_interior,
         )
     else:
         print(f"[1/3] Reading {args.input_ply} ...")
@@ -1343,7 +1301,20 @@ def main() -> None:
             voxel_size=args.voxel_size,
             r_fine=args.r_fine,
             r_coarse=args.r_coarse,
+            pure_interior=args.pure_interior,
         )
+
+    if args.export_graph:
+        if not args.pure_interior and not use_streaming and "scalar_ground_truth" in extras:
+            histogram = class_histograms(extras["scalar_ground_truth"].astype(np.int32),
+                                         res["superpoint_p1"][res["orig_to_p0"]], res["num_p1"])
+        else:
+            histogram = class_histograms(res["pseudo_label"], res["superpoint_p1"], res["num_p1"])
+        save_graph(args.export_graph, res, histogram,
+                   {"source": str(args.input_ply.resolve()), "voxel_size": args.voxel_size,
+                    "role": "interior" if args.pure_interior else "entrance"})
+    if args.model:
+        apply_model(res, args.model, args.model_min_confidence)
 
     p0_pred = res["predicted_class"]
     p0_zone = res["cave_zone"]
@@ -1391,15 +1362,38 @@ def main() -> None:
         "scalar_drip_line_dist": res["drip_line_dist"],
         "scalar_rel_elevation": res["rel_elevation"],
         "scalar_pseudo_label": res["pseudo_label"],
+        "scalar_above_roof": res["above_roof"],
         "scalar_superpoint_p1": res["superpoint_p1"],
         "scalar_superpoint_p2": res["superpoint_p2"],
         "scalar_cavern_score": res["cavern_score"],
         "scalar_predicted_class": res["predicted_class"],
         "scalar_cave_zone": res["cave_zone"],
     }
+    if args.model:
+        scalars_out["scalar_model_confidence"] = res["model_confidence"]
+        scalars_out["scalar_heuristic_class"] = res["heuristic_class"]
 
     print(f"[3/3] Exporting CloudCompare diagnostic PLY -> {diag_path}")
     write_ply_binary(diag_path, res["p0_xyz_f64"], res["p0_normals"], scalars_out)
+    stress_metrics = None
+    if args.stress_test:
+        stress_metrics = run_cutmix_stress_test(lib, xyz_f64, normals_in, args.voxel_size,
+                                               args.model, args.model_min_confidence)
+
+    if args.report_json:
+        args.report_json.parent.mkdir(parents=True, exist_ok=True)
+        args.report_json.write_text(json.dumps({
+            "input": str(args.input_ply), "original_points": num_vertices,
+            "voxel_size": args.voxel_size, "p0": n_p0, "p1": res["num_p1"], "p2": res["num_p2"],
+            "edges": len(res["edge_u"]), "semantic_counts": [n_cav, n_veg, n_ter],
+            "zone_counts": [n_floor, n_wall, n_ceil, n_veg, n_ter],
+            "pseudo_known": int(np.sum(res["sp_pseudo_label"] != -100)),
+            "timings": res["timings"], "model": str(args.model) if args.model else None,
+            "stress": stress_metrics,
+        }, indent=2)+"\n")
+
+    if args.diagnostic_only:
+        return
 
     if use_streaming:
         t_e0 = time.perf_counter()
@@ -1427,10 +1421,6 @@ def main() -> None:
             f"      Exporting cleaned full-resolution PLY ({len(clean_xyz):,}/{len(xyz_f64):,} pts) -> {clean_path}"
         )
         write_ply_binary(clean_path, clean_xyz, clean_normals, {})
-
-        if args.stress_test:
-            run_cutmix_stress_test(lib, xyz_f64, normals_in, voxel_size=args.voxel_size)
-
 
 if __name__ == "__main__":
     main()

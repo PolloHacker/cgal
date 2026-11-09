@@ -101,3 +101,14 @@ python main.py
 ```
 
 Você pode modificar as variáveis de entrada, diretório de saída e caminhos dos binários diretamente no bloco `__main__` do `main.py`, bem como passar opções adicionais ao binário de pré-processamento (como `--enable-spatial-subsampling`, `--remove-outliers-percent`, etc.).
+
+## Filtro de vegetação por superpontos
+
+O protótipo independente `spt_filter.py` combina geometria multiescala, WNNC,
+particionamento cut-pursuit e contexto de cobertura rochosa. Exporta diagnóstico
+para CloudCompare e uma nuvem limpa na resolução original. O classificador
+GraphSAGE é opcional e ainda precisa de validação em entradas reais.
+
+Consulte o [guia de treinamento e validação](docs/spt-training-and-validation.md)
+para compilação, testes, preparação das anotações e execução. As decisões e os
+resultados estão no [plano do filtro](docs/spt-superpoint-vegetation-filtering-plan.md).

@@ -1,0 +1,286 @@
+{
+  "training": [
+    {
+      "path": "../annotations/combined/rupt_annotated.ply",
+      "cave_system": "rupt",
+      "role": "interior",
+      "voxel_size": 0.04
+    },
+    {
+      "path": "../annotations/combined/BaumeDeLongeaigue_annotated.ply",
+      "cave_system": "baume_de_longeaigue",
+      "role": "interior",
+      "voxel_size": 0.04
+    },
+    {
+      "path": "../annotations/combined/diaclase_annotated.ply",
+      "cave_system": "diaclase",
+      "role": "interior",
+      "voxel_size": 0.04
+    },
+    {
+      "path": "../annotations/combined/interior_lapinha_annotated.ply",
+      "cave_system": "lapinha",
+      "role": "interior",
+      "voxel_size": 0.04
+    },
+    {
+      "path": "../input/point-clouds/archamps_post_etroiture.ply",
+      "cave_system": "archamps",
+      "role": "interior",
+      "voxel_size": 0.04
+    },
+    {
+      "path": "../input/point-clouds/grotte_de_la_sourde.ply",
+      "cave_system": "grotte_de_la_sourde",
+      "role": "interior",
+      "voxel_size": 0.04
+    },
+    {
+      "path": "../input/point-clouds/grotte_de_la_madeleine.ply",
+      "cave_system": "grotte_de_la_madeleine",
+      "role": "interior",
+      "voxel_size": 0.04
+    },
+    {
+      "path": "../input/point-clouds/hoelloch_keller_aquarium.ply",
+      "cave_system": "hoelloch",
+      "role": "interior",
+      "voxel_size": 0.04
+    },
+    {
+      "path": "../annotations/combined/S11D_0061_annotated.ply",
+      "cave_system": "S11D_0061",
+      "role": "interior",
+      "voxel_size": 0.08
+    },
+    {
+      "path": "../annotations/combined/gruta_do_janelao_annotated.ply",
+      "cave_system": "gruta_do_janelao",
+      "role": "entrance",
+      "voxel_size": 0.35
+    }
+  ],
+  "canopy_chunks": [
+    {
+      "path": "../annotations/canopy/for_instance_tree_01.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_02.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_03.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_04.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_05.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_06.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_07.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_08.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_09.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_10.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_11.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_12.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_13.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_14.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_15.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_16.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_17.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_18.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_19.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_20.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_21.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_22.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_23.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_24.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_25.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_26.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_27.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_28.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_29.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_30.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_31.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_32.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_33.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_34.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_35.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_36.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_37.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_38.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_39.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_40.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_41.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_42.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_43.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_44.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_45.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_46.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_47.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_48.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_49.ply",
+      "cave_system": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/for_instance_tree_50.ply",
+      "cave_system": "for_instance"
+    }
+  ],
+  "validation": [
+    {
+      "path": "../annotations/combined/S11A_0257_annotated.ply",
+      "cave_system": "S11A_0257",
+      "voxel_size": 0.04,
+      "already_p0": true
+    },
+    {
+      "path": "../annotations/combined/lp_jl_annotated.ply",
+      "cave_system": "lp_jl",
+      "voxel_size": 0.08,
+      "already_p0": true
+    },
+    {
+      "path": "../annotations/combined/lp_boi_annotated.ply",
+      "cave_system": "lp_boi",
+      "voxel_size": 0.12,
+      "already_p0": true
+    }
+  ]
+}

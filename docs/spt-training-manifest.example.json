@@ -1,0 +1,14 @@
+{
+  "training": [
+    {"path": "../input/rupt.ply", "cave_system": "rupt", "role": "interior"},
+    {"path": "../input/BaumeDeLongeaigue.ply", "cave_system": "baume_de_longeaigue", "role": "interior"},
+    {"path": "../input/diaclase.ply", "cave_system": "diaclase", "role": "interior"},
+    {"path": "../input/interior_lapinha.ply", "cave_system": "lapinha", "role": "interior"}
+  ],
+  "canopy_chunks": [],
+  "validation": [
+    {"path": "../annotations/validation/S11A_0257_entrance.ply", "source": "../input/point-clouds_S11A_0257.ply", "cave_system": "s11a_0257", "label_field": "scalar_ground_truth", "voxel_size": 0.04},
+    {"path": "../annotations/validation/Lp_JL_entrance.ply", "source": "../input/Lp_JL.ply", "cave_system": "lp_jl", "label_field": "scalar_ground_truth", "voxel_size": 0.08},
+    {"path": "../annotations/validation/Lp_Boi_entrance.ply", "source": "../input/Lp_Boi.ply", "cave_system": "lp_boi", "label_field": "scalar_ground_truth", "voxel_size": 0.12}
+  ]
+}

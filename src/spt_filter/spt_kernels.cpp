@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // High-performance OpenMP + Eigen3 C++ kernels for Multi-Scale Geometric Features,
-// 3D Cone Enclosure Raycasting, and l0-Cut Pursuit Superpoint Partitioning.
+// 3D Cone Enclosure Raycasting, and the boundary graph for upstream cut-pursuit.
 
 #include <Eigen/Dense>
 #include <Eigen/Eigenvalues>
@@ -45,7 +45,7 @@ struct SpatialGrid {
     std::vector<int32_t> point_count;
     std::vector<int32_t> sorted_points;
 
-    void build(const float* xyz, int32_t n_pts, float cell_size) {
+    void build(const float* xyz, int32_t n_pts, float cell_size, bool fixed_origin = false) {
         inv_cell_size = 1.0f / cell_size;
         min_x = xyz[0];
         min_y = xyz[1];
@@ -55,6 +55,7 @@ struct SpatialGrid {
             min_y = std::min(min_y, xyz[3 * i + 1]);
             min_z = std::min(min_z, xyz[3 * i + 2]);
         }
+        if (fixed_origin) min_x = min_y = min_z = 0.0f;
 
         uint32_t cap = 1;
         while (cap < static_cast<uint32_t>(n_pts) * 2U) cap <<= 1U;
@@ -137,6 +138,8 @@ struct SpatialGrid {
 
 extern "C" {
 
+int32_t spt_kernel_abi_version() { return 2; }
+
 // -----------------------------------------------------------------------------
 // 1. Voxel Grid Subsampling (P0)
 // Returns number of P0 voxels M, fills p0_to_orig[M] (representative point index)
@@ -151,7 +154,7 @@ int32_t spt_voxel_subsample(
 ) {
     if (n_pts <= 0) return 0;
     SpatialGrid grid;
-    grid.build(xyz, n_pts, voxel_size);
+    grid.build(xyz, n_pts, voxel_size, true);
     const int32_t num_voxels = static_cast<int32_t>(grid.point_count.size());
 
     #pragma omp parallel for schedule(static)
@@ -196,9 +199,10 @@ int32_t spt_voxel_subsample(
 //   feat_out[i * 6 + 2] = scattering (sphericity: l3 / l1)
 //   feat_out[i * 6 + 3] = linearity ((l1 - l2) / l1)
 //   feat_out[i * 6 + 4] = omnivariance (cbrt(l1*l2*l3) / (l1+l2+l3))
-//   feat_out[i * 6 + 5] = normal_dispersion (1 - ||mean(n_j)||)
+//   feat_out[i * 6 + 5] = sign-invariant normal structure tensor dispersion
 // If compute_normals != 0, also writes estimated PCA normals to normals_inout[n_pts * 3]
-// oriented consistently toward the local tunnel interior centroid.
+// aligned with WNNC. Mode 2 retains the unsmoothed PCA normal. expand_sparse=0
+// strictly bounds partition neighborhoods, independently of classification scales.
 // -----------------------------------------------------------------------------
 void spt_compute_scale_features(
     const float* xyz,
@@ -206,6 +210,7 @@ void spt_compute_scale_features(
     int32_t n_pts,
     float radius,
     int32_t compute_normals,
+    int32_t expand_sparse,
     float* feat_out
 ) {
     // For coarse scales (radius >= 0.30m) on large clouds when normals are already known,
@@ -301,7 +306,7 @@ void spt_compute_scale_features(
             }
 
             // If point is in a low-density region (< 6 neighbors within r), expand search to 2*r and 3*r
-            if (cnt < 6) {
+            if (cnt < 6 && expand_sparse) {
                 mx = my = mz = 0.0;
                 cxx = cxy = cxz = cyy = cyz = czz = 0.0;
                 cnt = 0;
@@ -328,7 +333,7 @@ void spt_compute_scale_features(
                     }
                 }
             }
-            if (cnt < 6) {
+            if (cnt < 6 && expand_sparse) {
                 mx = my = mz = 0.0;
                 cxx = cxy = cxz = cyy = cyz = czz = 0.0;
                 cnt = 0;
@@ -408,7 +413,8 @@ void spt_compute_scale_features(
 
             // Combine global WNNC orientation with local PCA normal on planar surfaces,
             // while keeping unsmoothed local PCA normal on non-planar 3D scattering structures
-            float w_wnnc = 0.60f * std::clamp((feat_out[6 * i + 1] - 0.25f) * 2.5f, 0.0f, 1.0f);
+            float w_wnnc = compute_normals == 2 ? 0.0f :
+                0.60f * std::clamp((feat_out[6 * i + 1] - 0.25f) * 2.5f, 0.0f, 1.0f);
             Eigen::Vector3f blended = w_wnnc * wnnc_n + (1.0f - w_wnnc) * n_vec;
             float b_norm = blended.norm();
             if (b_norm > 1e-6f) blended /= b_norm;
@@ -466,7 +472,7 @@ void spt_compute_scale_features(
             }
         }
 
-        if (cnt < 6) {
+        if (cnt < 6 && expand_sparse) {
             mx = my = mz = 0.0;
             cxx = cxy = cxz = cyy = cyz = czz = 0.0;
             nxx = nxy = nxz = nyy = nyz = nzz = 0.0;
@@ -501,7 +507,7 @@ void spt_compute_scale_features(
                 }
             }
         }
-        if (cnt < 6) {
+        if (cnt < 6 && expand_sparse) {
             mx = my = mz = 0.0;
             cxx = cxy = cxz = cyy = cyz = czz = 0.0;
             nxx = nxy = nxz = nyy = nyz = nzz = 0.0;
@@ -619,8 +625,7 @@ void spt_compute_enclosure(
 
     // Precompute per-cell 2D rock surface weight using coarse-scale manifold coherence so
     // porous 3D leaf canopies have cell_rock_weight == 0.0 while coherent cave rock has ~ 1.0.
-    // Also separate cell_roof_weight (blocks upward-facing hillside slopes nz > +0.15 from counting
-    // as overhead cave ceilings) and cell_floor_weight (requires upward/horizontal floor surface).
+    // Roof/floor occupancy must not depend on normal polarity before verification.
     std::vector<float> cell_rock_weight(num_cells, 0.0f);
     std::vector<float> cell_roof_weight(num_cells, 0.0f);
     std::vector<float> cell_floor_weight(num_cells, 0.0f);
@@ -629,16 +634,15 @@ void spt_compute_enclosure(
     for (int32_t c = 0; c < num_cells; ++c) {
         const int32_t start = grid.point_start[c];
         const int32_t count = grid.point_count[c];
-        double c_rug = 0.0, c_plan = 0.0, c_scat = 0.0, c_disp = 0.0, c_nz = 0.0;
+        double c_rug = 0.0, c_plan = 0.0, c_scat = 0.0, c_disp = 0.0;
         for (int32_t k = 0; k < count; ++k) {
             int32_t idx = grid.sorted_points[start + k];
             c_rug  += coarse_features[6 * idx + 0];
             c_plan += coarse_features[6 * idx + 1];
             c_scat += coarse_features[6 * idx + 2];
             c_disp += coarse_features[6 * idx + 5];
-            c_nz   += normals_inout[3 * idx + 2];
         }
-        c_rug  /= count; c_plan /= count; c_scat /= count; c_disp /= count; c_nz /= count;
+        c_rug  /= count; c_plan /= count; c_scat /= count; c_disp /= count;
 
         // At coarse scale (r_coarse >= 0.50m), tree canopies never form a coherent 1m planar rock sheet,
         // so disp_w * scat_w * rug_w * plan_w == 0.0 in foliage canopies and ~1.0 on cave roofs/walls.
@@ -809,246 +813,68 @@ void spt_compute_enclosure(
 }
 
 // -----------------------------------------------------------------------------
-// 4. Hierarchical l0-Cut Pursuit Superpoint Partitioning (P0 -> P1 -> P2)
-// Partitions n_pts points with d_feat features into homogeneous superpoints by
-// minimizing the l0-cut pursuit energy + minimum component size (cutoff).
-// Implements:
-//   1. Max-edge-length pruning (max_edge_dist = 3.5 * d_0) to sever air bridges
-//      between overhanging branches and cave rock (keeping 1-NN only if isolated).
-//   2. Contrast-sensitive edge weights w_ij combining spatial inverse distance,
-//      normal alignment exp(-(1 - |n_i . n_j|) / sigma_n^2), and normal dispersion
-//      jump exp(-(D_i - D_j)^2 / sigma_D^2) so superpoints snap cleanly to the
-//      rock-foliage interface.
+// 4. Radius-pruned, contrast-sensitive point graph for upstream cut-pursuit.
+// Each row has the exact ten nearest neighbors inside max_edge_dist, or -1.
+// Python supplies a single exact global nearest neighbor for isolated rows.
+// This keeps graph construction independent of the partition optimization.
 // -----------------------------------------------------------------------------
-int32_t spt_partition_superpoints(
-    const float* xyz,
-    const float* normals,           // [n_pts, 3]
-    const float* normal_dispersion, // [n_pts]
-    const float* features,          // [n_pts, d_feat]
-    int32_t n_pts,
-    int32_t d_feat,
-    float neighbor_radius,
-    float max_edge_dist,
-    float reg_strength,
-    float spatial_weight,
-    int32_t min_cutoff,
-    int32_t* sp_labels_out
+void spt_build_partition_graph(
+    const float* xyz, const float* normals, const float* dispersion,
+    int32_t n_pts, float max_edge_dist, int32_t* neighbors, float* weights
 ) {
-    if (n_pts <= 0) return 0;
-
+    if (n_pts <= 0) return;
+    constexpr int K = 10;
     SpatialGrid grid;
-    grid.build(xyz, n_pts, neighbor_radius);
-    const float r2 = neighbor_radius * neighbor_radius;
-    const float max_edge_d2 = max_edge_dist * max_edge_dist;
-
-    // Build pruned k=10 adjacency list + contrast-sensitive edge weights
-    constexpr int MAX_K = 10;
-    std::vector<int32_t> adj_indices(static_cast<size_t>(n_pts) * MAX_K, -1);
-    std::vector<float> adj_weights(static_cast<size_t>(n_pts) * MAX_K, 1.0f);
-    std::vector<int32_t> adj_counts(n_pts, 0);
-
-    constexpr float inv_sigma_n2 = 1.0f / (0.35f * 0.35f);
-    constexpr float inv_sigma_d2 = 1.0f / (0.20f * 0.20f);
-
+    grid.build(xyz, n_pts, max_edge_dist);
+    const float radius2 = max_edge_dist * max_edge_dist;
     #pragma omp parallel for schedule(dynamic, 1024)
     for (int32_t i = 0; i < n_pts; ++i) {
-        const float px = xyz[3 * i + 0];
-        const float py = xyz[3 * i + 1];
-        const float pz = xyz[3 * i + 2];
-        const float nix = normals[3 * i + 0];
-        const float niy = normals[3 * i + 1];
-        const float niz = normals[3 * i + 2];
-        const float di = normal_dispersion[i];
-
+        std::pair<float, int32_t> best[K];
+        int count = 0;
         int32_t ix, iy, iz;
-        grid.point_to_cell(px, py, pz, ix, iy, iz);
-
-        std::pair<float, int32_t> cand[64];
-        int n_cand = 0;
-
-        for (int32_t dz = -1; dz <= 1; ++dz) {
-            for (int32_t dy = -1; dy <= 1; ++dy) {
-                for (int32_t dx = -1; dx <= 1; ++dx) {
-                    int32_t cid = grid.find_cell(ix + dx, iy + dy, iz + dz);
-                    if (cid == -1) continue;
-                    const int32_t start = grid.point_start[cid];
-                    const int32_t end = start + grid.point_count[cid];
-                    for (int32_t k = start; k < end; ++k) {
-                        int32_t j = grid.sorted_points[k];
-                        if (j == i) continue;
-                        float qx = xyz[3 * j + 0] - px;
-                        float qy = xyz[3 * j + 1] - py;
-                        float qz = xyz[3 * j + 2] - pz;
-                        float d2 = qx * qx + qy * qy + qz * qz;
-                        if (d2 <= r2) {
-                            if (n_cand < 64) {
-                                cand[n_cand++] = {d2, j};
-                            } else if (d2 < cand[n_cand - 1].first) {
-                                cand[n_cand - 1] = {d2, j};
-                            }
+        grid.point_to_cell(xyz[3*i], xyz[3*i+1], xyz[3*i+2], ix, iy, iz);
+        for (int dz = -1; dz <= 1; ++dz)
+            for (int dy = -1; dy <= 1; ++dy)
+                for (int dx = -1; dx <= 1; ++dx) {
+                    const int32_t cell = grid.find_cell(ix+dx, iy+dy, iz+dz);
+                    if (cell < 0) continue;
+                    const int32_t end = grid.point_start[cell] + grid.point_count[cell];
+                    for (int32_t k = grid.point_start[cell]; k < end; ++k) {
+                        const int32_t j = grid.sorted_points[k];
+                        if (i == j) continue;
+                        const float x = xyz[3*i] - xyz[3*j];
+                        const float y = xyz[3*i+1] - xyz[3*j+1];
+                        const float z = xyz[3*i+2] - xyz[3*j+2];
+                        const float d2 = x*x + y*y + z*z;
+                        if (d2 > radius2) continue;
+                        const std::pair<float, int32_t> candidate{d2, j};
+                        if (count == K && !(candidate < best[K-1])) continue;
+                        int slot = std::min(count, K-1);
+                        while (slot > 0 && candidate < best[slot-1]) {
+                            best[slot] = best[slot-1];
+                            --slot;
                         }
+                        best[slot] = candidate;
+                        if (count < K) ++count;
                     }
                 }
-            }
-        }
-        std::sort(cand, cand + n_cand);
-
-        // Prune edges longer than max_edge_dist (3.5 * d_0); keep single nearest neighbor if isolated
-        int keep = 0;
-        const int limit = std::min(n_cand, MAX_K);
-        for (int k = 0; k < limit; ++k) {
-            if (cand[k].first <= max_edge_d2 || k == 0) {
-                int32_t j = cand[k].second;
-                float dist = std::sqrt(cand[k].first);
-                float njx = normals[3 * j + 0];
-                float njy = normals[3 * j + 1];
-                float njz = normals[3 * j + 2];
-                float dj = normal_dispersion[j];
-
-                float abs_dot = std::clamp(std::abs(nix * njx + niy * njy + niz * njz), 0.0f, 1.0f);
-                float d_diff = di - dj;
-                float w_norm = std::exp(-(1.0f - abs_dot) * inv_sigma_n2);
-                float w_disp = std::exp(-(d_diff * d_diff) * inv_sigma_d2);
-                float w_dist = 1.0f / (dist / std::max(max_edge_dist, 1e-3f) + 0.25f);
-                float w_ij = std::clamp(w_dist * w_norm * w_disp, 0.03f, 4.0f);
-
-                adj_indices[static_cast<size_t>(i) * MAX_K + keep] = j;
-                adj_weights[static_cast<size_t>(i) * MAX_K + keep] = w_ij;
-                keep++;
-            } else {
-                break;
-            }
-        }
-        adj_counts[i] = keep;
-    }
-
-    // Disjoint-set (Union-Find) with component feature centroids & sizes for l0-cut pursuit
-    std::vector<int32_t> parent(n_pts);
-    std::vector<int32_t> comp_size(n_pts, 1);
-    std::vector<float> comp_feat(static_cast<size_t>(n_pts) * d_feat);
-    std::vector<float> comp_xyz(static_cast<size_t>(n_pts) * 3);
-
-    for (int32_t i = 0; i < n_pts; ++i) {
-        parent[i] = i;
-        for (int d = 0; d < d_feat; ++d) {
-            comp_feat[static_cast<size_t>(i) * d_feat + d] = features[static_cast<size_t>(i) * d_feat + d];
-        }
-        comp_xyz[3 * i + 0] = xyz[3 * i + 0];
-        comp_xyz[3 * i + 1] = xyz[3 * i + 1];
-        comp_xyz[3 * i + 2] = xyz[3 * i + 2];
-    }
-
-    auto find_root = [&](int32_t u) {
-        while (parent[u] != u) {
-            parent[u] = parent[parent[u]];
-            u = parent[u];
-        }
-        return u;
-    };
-
-    auto merge_Select = [&](int32_t ru, int32_t rv) {
-        if (ru == rv) return ru;
-        if (comp_size[ru] < comp_size[rv]) std::swap(ru, rv);
-        const float su = static_cast<float>(comp_size[ru]);
-        const float sv = static_cast<float>(comp_size[rv]);
-        const float inv_s = 1.0f / (su + sv);
-        for (int d = 0; d < d_feat; ++d) {
-            comp_feat[static_cast<size_t>(ru) * d_feat + d] =
-                (comp_feat[static_cast<size_t>(ru) * d_feat + d] * su +
-                 comp_feat[static_cast<size_t>(rv) * d_feat + d] * sv) * inv_s;
-        }
-        for (int d = 0; d < 3; ++d) {
-            comp_xyz[3 * ru + d] = (comp_xyz[3 * ru + d] * su + comp_xyz[3 * rv + d] * sv) * inv_s;
-        }
-        parent[rv] = ru;
-        comp_size[ru] += comp_size[rv];
-        return ru;
-    };
-
-    // Multi-pass l0-cut pursuit region merging with progressively increasing threshold up to reg_strength
-    const float thresholds[4] = {
-        reg_strength * 0.15f,
-        reg_strength * 0.40f,
-        reg_strength * 0.75f,
-        reg_strength
-    };
-
-    for (int pass = 0; pass < 4; ++pass) {
-        const float thresh = thresholds[pass];
-        for (int32_t i = 0; i < n_pts; ++i) {
-            int32_t ru = find_root(i);
-            const int deg = adj_counts[i];
-            for (int k = 0; k < deg; ++k) {
-                int32_t j = adj_indices[static_cast<size_t>(i) * MAX_K + k];
-                float w_ij = adj_weights[static_cast<size_t>(i) * MAX_K + k];
-                int32_t rv = find_root(j);
-                if (ru == rv) continue;
-
-                // Compute contrast-weighted l0-cut pursuit merge cost between superpoints ru and rv:
-                // Low edge affinity w_ij across normal/dispersion jumps inflates effective cost, preventing merge
-                float feat_dist2 = 0.0f;
-                for (int d = 0; d < d_feat; ++d) {
-                    float diff = comp_feat[static_cast<size_t>(ru) * d_feat + d] -
-                                 comp_feat[static_cast<size_t>(rv) * d_feat + d];
-                    feat_dist2 += diff * diff;
-                }
-                float dx = comp_xyz[3 * ru + 0] - comp_xyz[3 * rv + 0];
-                float dy = comp_xyz[3 * ru + 1] - comp_xyz[3 * rv + 1];
-                float dz = comp_xyz[3 * ru + 2] - comp_xyz[3 * rv + 2];
-                float sp_dist2 = (dx * dx + dy * dy + dz * dz) * spatial_weight;
-
-                float total_cost = (feat_dist2 + sp_dist2) / std::max(w_ij, 0.05f);
-                if (total_cost <= thresh) {
-                    ru = merge_Select(ru, rv);
-                }
-            }
+        for (int k = 0; k < K; ++k) {
+            const size_t out = static_cast<size_t>(i)*K + k;
+            neighbors[out] = k < count ? best[k].second : -1;
+            weights[out] = 0.0f;
+            if (k >= count) continue;
+            const int32_t j = best[k].second;
+            float dot = 0.0f;
+            for (int d = 0; d < 3; ++d) dot += normals[3*i+d]*normals[3*j+d];
+            const float jump = dispersion[i] - dispersion[j];
+            const float affinity = std::exp(-(1.0f-std::clamp(std::abs(dot),0.0f,1.0f))/(0.35f*0.35f)
+                                           -jump*jump/(0.20f*0.20f));
+            // Normalize inverse distance by voxel spacing to keep regularization
+            // comparable across 4 cm, 8 cm, and 12 cm voxel grids.
+            const float spacing = max_edge_dist / 3.5f;
+            weights[out] = affinity * spacing / (std::sqrt(best[k].first) + spacing*0.25f);
         }
     }
-
-    // Enforce minimum component size (min_cutoff) by merging small fragments into most compatible neighbor
-    for (int iter = 0; iter < 3; ++iter) {
-        for (int32_t i = 0; i < n_pts; ++i) {
-            int32_t ru = find_root(i);
-            if (comp_size[ru] >= min_cutoff) continue;
-
-            const int deg = adj_counts[i];
-            int32_t best_rv = -1;
-            float best_cost = 1e30f;
-            for (int k = 0; k < deg; ++k) {
-                int32_t j = adj_indices[static_cast<size_t>(i) * MAX_K + k];
-                float w_ij = adj_weights[static_cast<size_t>(i) * MAX_K + k];
-                int32_t rv = find_root(j);
-                if (ru == rv) continue;
-
-                float feat_dist2 = 0.0f;
-                for (int d = 0; d < d_feat; ++d) {
-                    float diff = comp_feat[static_cast<size_t>(ru) * d_feat + d] -
-                                 comp_feat[static_cast<size_t>(rv) * d_feat + d];
-                    feat_dist2 += diff * diff;
-                }
-                float weighted_cost = feat_dist2 / std::max(w_ij, 0.05f);
-                if (weighted_cost < best_cost) {
-                    best_cost = weighted_cost;
-                    best_rv = rv;
-                }
-            }
-            if (best_rv != -1) {
-                merge_Select(ru, best_rv);
-            }
-        }
-    }
-
-    // Relabel components contiguously 0 .. num_sp - 1
-    std::vector<int32_t> root_to_id(n_pts, -1);
-    int32_t num_sp = 0;
-    for (int32_t i = 0; i < n_pts; ++i) {
-        int32_t r = find_root(i);
-        if (root_to_id[r] == -1) {
-            root_to_id[r] = num_sp++;
-        }
-        sp_labels_out[i] = root_to_id[r];
-    }
-    return num_sp;
 }
 
 // -----------------------------------------------------------------------------
@@ -1149,7 +975,7 @@ void spt_map_points_to_p0(
     if (num_p0 <= 0 || n_query <= 0) return;
 
     SpatialGrid grid;
-    grid.build(p0_xyz, num_p0, voxel_size * 1.8f);
+    grid.build(p0_xyz, num_p0, voxel_size, true);
 
     #pragma omp parallel for schedule(static)
     for (int32_t i = 0; i < n_query; ++i) {
@@ -1159,6 +985,11 @@ void spt_map_points_to_p0(
         int32_t ix, iy, iz;
         grid.point_to_cell(px, py, pz, ix, iy, iz);
 
+        const int32_t own_cell = grid.find_cell(ix, iy, iz);
+        if (own_cell >= 0) {
+            query_to_p0_out[i] = grid.sorted_points[grid.point_start[own_cell]];
+            continue;
+        }
         int32_t best_j = 0;
         float best_d2 = 1e30f;
 
@@ -1188,7 +1019,7 @@ void spt_map_points_to_p0(
 }
 
 // -----------------------------------------------------------------------------
-// 7. CUDA-Accelerated WNNC Global Normal Estimation (Lin et al., ACM ToG 2024)
+// 7. OpenMP CPU WNNC Global Normal Estimation (Lin et al., ACM ToG 2024)
 // Uses WindingNumberOperator<float> + wnnc::estimateNormals to compute globally
 // consistent normals across the cave point cloud.
 // Negates outward WNNC dipole normals so interior cave normals point INWARD:
