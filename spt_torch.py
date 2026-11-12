@@ -18,8 +18,12 @@ def torch_graph(graph, device):
 class SuperpointGraphSAGE(nn.Module):
     def __init__(self, feature_mean, feature_std, hidden_dim=64):
         super().__init__()
-        self.register_buffer("feature_mean", torch.as_tensor(feature_mean, dtype=torch.float32))
-        self.register_buffer("feature_std", torch.as_tensor(feature_std, dtype=torch.float32))
+        mean_t = torch.as_tensor(feature_mean, dtype=torch.float32)
+        std_t = torch.as_tensor(feature_std, dtype=torch.float32)
+        self.register_buffer("feature_mean", mean_t)
+        self.register_buffer("feature_std", std_t)
+        self.register_buffer("global_feat_mean", mean_t.clone())
+        self.register_buffer("global_feat_std", std_t.clone())
         n = self.feature_mean.numel()
         self.self_1 = nn.Linear(n, hidden_dim)
         self.neighbor_1 = nn.Linear(n, hidden_dim, bias=False)
@@ -28,7 +32,7 @@ class SuperpointGraphSAGE(nn.Module):
         self.output = nn.Linear(hidden_dim, 3)
 
     def forward(self, x, adjacency):
-        h = torch.clamp((x-self.feature_mean) / self.feature_std, -5.0, 5.0)
+        h = torch.clamp((x - self.global_feat_mean) / self.global_feat_std, -5.0, 5.0)
         h = F.relu(self.self_1(h) + self.neighbor_1(torch.sparse.mm(adjacency, h)))
         h = F.relu(self.self_2(h) + self.neighbor_2(torch.sparse.mm(adjacency, h)))
         return self.output(h)
@@ -40,6 +44,7 @@ class SuperpointGraphSAGE(nn.Module):
         values = {"schema": np.asarray(SCHEMA), "feature_names": feature_names,
                   "metadata": np.asarray(json.dumps(metadata)),
                   "feature_mean": array(self.feature_mean), "feature_std": array(self.feature_std),
+                  "global_feat_mean": array(self.global_feat_mean), "global_feat_std": array(self.global_feat_std),
                   "output_weight": array(self.output.weight), "output_bias": array(self.output.bias)}
         for layer in (1, 2):
             values[f"self_{layer}"] = array(getattr(self, f"self_{layer}").weight)
@@ -109,8 +114,10 @@ def train_graphs(graphs, epochs=60, lr=0.003, hidden_dim=64, device="cpu", seed=
     names = graphs[0]["feature_names"]
     if any(not np.array_equal(g["feature_names"], names) for g in graphs):
         raise ValueError("Training graphs use different feature schemas")
-    known = np.vstack([g["X"][g["valid_mask"]] for g in graphs])
-    model = SuperpointGraphSAGE(known.mean(axis=0), np.maximum(known.std(axis=0), 0.01), hidden_dim).to(device)
+    all_train_x = np.concatenate([g.get("raw_x", g["X"]) for g in graphs], axis=0)
+    global_feat_mean = np.mean(all_train_x, axis=0).astype(np.float32)
+    global_feat_std = np.maximum(np.std(all_train_x, axis=0), 1e-4).astype(np.float32)
+    model = SuperpointGraphSAGE(global_feat_mean, global_feat_std, hidden_dim).to(device)
     class_mass = sum((g["histogram"][:, :3].sum(axis=0) for g in graphs), np.zeros(3))
     if class_mass[0] == 0 or class_mass[1] == 0:
         raise ValueError(f"Missing required cavern/vegetation training classes: {np.flatnonzero(class_mass[:2] == 0).tolist()}")
@@ -119,6 +126,7 @@ def train_graphs(graphs, epochs=60, lr=0.003, hidden_dim=64, device="cpu", seed=
     balancing[present] = np.clip(class_mass[present].sum() / (present.sum() * class_mass[present]), 0.5, 2.5)
     class_weights = torch.as_tensor(balancing, device=device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(epochs, 1), eta_min=1e-4)
     tensor_graphs = []
     for graph in graphs:
         tensor_graphs.append((torch.as_tensor(graph["X"], dtype=torch.float32),
@@ -143,6 +151,7 @@ def train_graphs(graphs, epochs=60, lr=0.003, hidden_dim=64, device="cpu", seed=
             nn.utils.clip_grad_norm_(model.parameters(), 5)
             optimizer.step()
             losses.append(float(loss.detach()))
+        scheduler.step()
         if epoch == 0 or (epoch+1) % 10 == 0 or epoch+1 == epochs:
             print(f"[Epoch {epoch+1}/{epochs}] masked KL + Lovasz: {np.mean(losses):.5f}", flush=True)
     model.eval()

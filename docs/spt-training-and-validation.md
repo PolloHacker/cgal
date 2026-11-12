@@ -1,8 +1,8 @@
 # SPT boundary filtering, training, and validation
 
-This is the current workflow as of 27 October 2026 (`spt-graph-v3`). The original design and its
+This is the current workflow (`spt-graph-v4`, alongside preserved `spt-graph-v3` and `spt-graph-v2` checkpoints). The original design and its
 historical measurements remain in [the pipeline plan](spt-superpoint-vegetation-filtering-plan.md),
-and the complete 25-cave fine-tuning + Pointcept/Utonia benchmark is documented in
+and the complete 28-cave fine-tuning (`v2` $\to$ `v3` $\to$ `v3-programmed` $\to$ `v4`) + Pointcept/Utonia benchmark is documented in
 [spt-finetuning-and-utonia-benchmark.md](spt-finetuning-and-utonia-benchmark.md).
 
 ## What is implemented
@@ -35,20 +35,22 @@ conduit footprint or above a detected roof. This protects rough interior pockets
 while allowing exterior trunks and slopes to be removed. These distances are
 geometric proxies for a drip line, not an explicitly reconstructed roof polygon.
 
-The graph classifier has two **learned GraphSAGE layers** (`spt-graph-v3`), with 104 input features:
+The graph classifier has two **learned GraphSAGE layers** (`spt-graph-v4` and `spt-graph-v3`), with 104 input features:
 P0 feature `mean/std/p10/p90` (10th and 90th percentiles replacing outlier-sensitive `min/max`),
 superpoint shape PCA with voxel-scale-normalized `shape_radius`, `tanh(dist / 5.0)` distance descriptors,
-and P2 parent means. Training uses PyTorch without PyG (`masked_purity_loss` with `label_smoothing = 0.08`
+and P2 parent means. In `spt-graph-v4`, global feature normalization statistics (`global_feat_mean` and `global_feat_std`)
+are computed across all training graphs in [`spt_torch.py`](../spt_torch.py) and saved directly inside the `.npz` and `.pt` checkpoints
+so exterior-dominated scans (`CFO_004`) do not suffer from per-cloud z-score drift. Training uses PyTorch without PyG (`masked_purity_loss` with `label_smoothing = 0.08`
 and per-node KL divergence clamped at `2.0`). Inference reads a portable `.npz` with NumPy/SciPy (`min_confidence = 0.0`,
-pure model prediction without heuristic fallback, followed by a 3D connected-component cavern manifold filter);
+pure model prediction without heuristic fallback, followed by a 3-stage roof-anchored geodesic cavern manifold filter in `filter_cavern_manifold`:
+Rule A Subterranean Lock + Pure Conduit Lock, Rule B Geodesic Drip-Line Cutoff via `dijkstra`, and Rule C Subterranean Core Requirement per Connected Component);
 a PyTorch `.pt` checkpoint is also saved.
 
 An explicitly designated pure-interior scan supplies exact cavern supervision (`0`).
 Heuristic seed generation is **strictly disabled in training**: entrance scans only receive
 supervision from explicit `scalar_ground_truth` annotations (`0 = cavern, 1 = vegetation, 2 = exterior ground, -100 = unknown`)
-or pre-labeled external forestry donor chunks (`annotations/canopy/for_instance_tree_01..50.ply`)
-grafted via pre-partition 3D CutMix (`deform_canopy_chunk`: $25\%–60\%$ point dropout, $\pm 12^\circ$ 3D tilt,
-and anisotropic scaling $s_x, s_y \in [0.70, 1.35], s_z \in [0.80, 1.25]$).
+or pre-labeled external forestry and airborne LiDAR donor chunks (`annotations/canopy/for_instance_tree_01..50.ply` and `annotations/canopy/dales_exterior_01..40.ply`)
+grafted via pre-partition 3D CutMix (`mouth`, `skylight`, and `exterior_surroundings` modes in `generate_cutmix_superpoint_graph` + `deform_canopy_chunk`).
 
 ## Build and verify
 
@@ -213,16 +215,23 @@ There is no train/validation split by individual superpoint or neighboring tile.
 
 ## Use a trained model
 
+Both `v4` (`spt-graph-v4`) and `v3` (`spt-graph-v3`) checkpoints are explicitly version-labeled under `output/spt_finetuned/`:
+
 ```bash
+# Run inference with spt-graph-v4 (active default: 3-class Cavern / Veg / Exterior Ground + 3-stage geodesic manifold filter)
 .venv/bin/python -B spt_filter.py input/Lp_JL.ply --voxel-size 0.08 \
-  --model output/spt_graphsage.npz --output-dir output/spt_model
+  --model output/spt_finetuned/spt_graphsage_v4.npz --output-dir output/spt_model_v4
+
+# Run inference with spt-graph-v3 (historical 2-class FOR-instance baseline)
+.venv/bin/python -B spt_filter.py input/Lp_JL.ply --voxel-size 0.08 \
+  --model output/spt_finetuned/spt_graphsage_v3.npz --output-dir output/spt_model_v3
 ```
 
 The model replaces semantic predictions and recomputes structural zones. Its raw
 softmax confidence and the original heuristic class are exported for inspection.
 `--model-min-confidence 0.8` optionally keeps heuristic labels below that model
 score; this is a softmax threshold, not a calibrated accuracy guarantee.
-Model feature schemas are checked before inference. Select a model using the
+Model feature schemas (`spt-graph-v4` and `spt-graph-v3`) are checked before inference. Select a model using the
 held-out annotations before relying on its cleaned clouds for reconstruction.
 
 To cache a graph independently:

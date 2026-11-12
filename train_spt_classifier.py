@@ -20,9 +20,29 @@ from spt_learning import (SCHEMA, cave_system_id, class_histograms, deform_canop
                           load_graph, save_graph, supervision_histogram)
 
 
+def load_donor_chunk(path):
+    """Load a coupled donor PLY returning (xyz, scalar_donor_class) with classes in {1, 2}."""
+    xyz, _, fields = read_ply(Path(path))
+    if "scalar_donor_class" in fields:
+        cls = fields["scalar_donor_class"].astype(np.int32)
+    elif "scalar_ground_truth" in fields:
+        cls = fields["scalar_ground_truth"].astype(np.int32)
+    else:
+        cls = np.ones(len(xyz), dtype=np.int32)
+    cls = np.where(cls == 2, 2, 1).astype(np.int32)
+    return xyz, cls
+
+
+def _unpack_donor(entry):
+    if isinstance(entry, tuple) and len(entry) == 2:
+        return entry[0], entry[1]
+    arr = np.asarray(entry, dtype=np.float64)
+    return arr, np.ones(len(arr), dtype=np.int32)
+
+
 def generate_cutmix_superpoint_graph(lib, cave_xyz_f64, canopy_chunks_xyz,
                                     voxel_size=0.04, seed=42, scenario="mouth"):
-    """Open a raw cave mouth/skylight, graft raw vegetation, then rerun all geometry."""
+    """Open a raw cave mouth/skylight/exterior_surroundings, graft coupled donors, then rerun geometry."""
     rng = np.random.default_rng(seed)
     center = cave_xyz_f64.mean(axis=0)
     local = cave_xyz_f64-center
@@ -36,6 +56,13 @@ def generate_cutmix_superpoint_graph(lib, cave_xyz_f64, canopy_chunks_xyz,
         kept = longitudinal <= mouth
         near = (longitudinal > mouth-3) & kept
         origin = center[:2]+mouth*forward
+    elif scenario == "exterior_surroundings":
+        mouth = np.percentile(longitudinal, rng.uniform(62, 82))
+        kept = longitudinal <= mouth
+        near = (longitudinal > mouth-3) & kept
+        if near.sum() < 20:
+            near = kept
+        origin = center[:2]+mouth*forward
     elif scenario == "skylight":
         mouth = np.percentile(longitudinal, rng.uniform(30, 70))
         origin = center[:2]+mouth*forward
@@ -47,45 +74,81 @@ def generate_cutmix_superpoint_graph(lib, cave_xyz_f64, canopy_chunks_xyz,
         roof_cut = np.percentile(cave_xyz_f64[near, 2], 60)
         kept = ~(near & (cave_xyz_f64[:, 2] > roof_cut))
     else:
-        raise ValueError("CutMix scenario must be mouth or skylight")
+        raise ValueError("CutMix scenario must be mouth, skylight, or exterior_surroundings")
     ground_z = float(np.percentile(cave_xyz_f64[near, 2], 15))
     roof_z = float(np.percentile(cave_xyz_f64[near, 2], 85))
     cave = cave_xyz_f64[kept]
     width = max(2.0, min(12.0, float(np.percentile(lateral, 90)-np.percentile(lateral, 10))))
-    grade = rng.uniform(0.05, 0.20)
+    grade = rng.uniform(0.03, 0.16)
     if scenario == "mouth":
         centers = [(rng.uniform(-width*.40, width*.40), f) for f in (1.5, 3.0, 5.0, 7.5, 10.5)]
+    elif scenario == "exterior_surroundings":
+        # Single continuous 25m x 30m DALES/FOR-instance ground + building + tree patch extending outward
+        centers = [(0.0, 13.5), (rng.uniform(-width*.35, width*.35), 3.0), (rng.uniform(-width*.35, width*.35), 6.5)]
     else:
         centers = [(rng.uniform(-2.0, 2.0), rng.uniform(-2.0, 2.0)) for _ in range(3)]
-    vegetation = []
+
+    donors = [_unpack_donor(c) for c in canopy_chunks_xyz] if canopy_chunks_xyz else []
+    ground_rich_indices = [
+        idx for idx, (pts, cls) in enumerate(donors)
+        if int(np.sum(cls == 2)) >= 2500 and (np.ptp(pts[:, 0]) >= 20.0 or np.ptp(pts[:, 1]) >= 20.0)
+    ]
+    if not ground_rich_indices:
+        ground_rich_indices = [idx for idx, (_, cls) in enumerate(donors) if int(np.sum(cls == 2)) >= 1000]
+
+    donor_pts_list = []
+    donor_cls_list = []
     for index, (a, f) in enumerate(centers):
         xy = origin+a*across+f*forward
-        base_z = (ground_z+grade*max(f, 0)) if scenario == "mouth" else roof_z
-        if canopy_chunks_xyz:
-            donor_idx = int(rng.integers(len(canopy_chunks_xyz)))
-            chunk = deform_canopy_chunk(canopy_chunks_xyz[donor_idx], rng)
-            chunk += np.r_[xy, base_z-np.percentile(chunk[:, 2], 2)]
-            if scenario == "mouth":
-                # Keep grafted exterior trees outside the enclosed cave tunnel behind the drip line
+        base_z = (ground_z+grade*max(f, 0)) if scenario in ("mouth", "exterior_surroundings") else roof_z
+        if donors:
+            if scenario == "exterior_surroundings" and index == 0 and ground_rich_indices:
+                # Primary 25m x 30m coupled ground + building + tree patch (no overlapping ground slabs)
+                donor_idx = int(rng.choice(ground_rich_indices))
+                raw_chunk, raw_cls = donors[donor_idx]
+                chunk, chunk_cls = deform_canopy_chunk(raw_chunk, rng, chunk_labels=raw_cls, tilt_deg=4.0)
+                gnd_mask = chunk_cls == 2
+                ref_z = float(np.percentile(chunk[gnd_mask, 2], 10)) if np.any(gnd_mask) else float(np.percentile(chunk[:, 2], 2))
+                chunk += np.r_[xy, ground_z - ref_z]
                 chunk_long = (chunk[:, :2] - center[:2]) @ forward
-                chunk = chunk[chunk_long >= mouth - 0.25]
+                keep_ext = chunk_long >= mouth - 0.25
+                chunk = chunk[keep_ext]
+                chunk_cls = chunk_cls[keep_ext]
             else:
-                # Keep skylight trees on/above the skylight roof opening
-                chunk = chunk[chunk[:, 2] >= roof_cut - 0.25]
+                # Tree canopy/trunk donors (keep Class 1 vegetation only so ground slabs never stack in the air)
+                donor_idx = int(rng.integers(len(donors)))
+                raw_chunk, raw_cls = donors[donor_idx]
+                veg_only = raw_chunk[raw_cls == 1]
+                if len(veg_only) < 100:
+                    veg_only = raw_chunk
+                chunk = deform_canopy_chunk(veg_only, rng, tilt_deg=12.0)
+                chunk += np.r_[xy, base_z - np.percentile(chunk[:, 2], 2)]
+                if scenario in ("mouth", "exterior_surroundings"):
+                    chunk_long = (chunk[:, :2] - center[:2]) @ forward
+                    chunk = chunk[chunk_long >= mouth - 0.25]
+                else:
+                    chunk = chunk[chunk[:, 2] >= roof_cut - 0.25]
+                chunk_cls = np.ones(len(chunk), dtype=np.int32)
             if len(chunk):
-                vegetation.append(chunk)
+                donor_pts_list.append(chunk)
+                donor_cls_list.append(chunk_cls)
         else:
             theta = rng.uniform(0, 2*np.pi, 1400)
             radius = rng.uniform(0.16, 0.28)+rng.normal(0, 0.012, len(theta))
             trunk = np.column_stack([xy[0]+radius*np.cos(theta), xy[1]+radius*np.sin(theta),
                                       rng.uniform(base_z, base_z+5, len(theta))])
-            vegetation += [trunk, np.r_[xy, base_z+0.8]+rng.normal(0, .55, (1200, 3))]
+            fol = np.r_[xy, base_z+0.8]+rng.normal(0, .55, (1200, 3))
+            donor_pts_list += [trunk, fol]
+            donor_cls_list += [np.ones(len(trunk), dtype=np.int32), np.ones(len(fol), dtype=np.int32)]
             for _ in range(8):
                 crown = np.r_[xy+rng.uniform(-1.8, 1.8, 2), base_z+rng.uniform(4, 8)]
-                vegetation.append(crown+rng.normal(0, .65, (500, 3)))
-    vegetation = np.vstack(vegetation)
-    xyz = np.vstack([cave, vegetation])
-    truth = np.concatenate([np.zeros(len(cave), dtype=np.int32), np.ones(len(vegetation), dtype=np.int32)])
+                c_pts = crown+rng.normal(0, .65, (500, 3))
+                donor_pts_list.append(c_pts)
+                donor_cls_list.append(np.ones(len(c_pts), dtype=np.int32))
+    grafted_xyz = np.vstack(donor_pts_list)
+    grafted_cls = np.concatenate(donor_cls_list).astype(np.int32)
+    xyz = np.vstack([cave, grafted_xyz])
+    truth = np.concatenate([np.zeros(len(cave), dtype=np.int32), grafted_cls])
     result = run_spt_pipeline(lib, xyz, None, voxel_size=voxel_size)
     # Every raw source point contributes, including different labels sharing a P0 voxel.
     mapping = result["superpoint_p1"][result["orig_to_p0"]]
@@ -188,7 +251,7 @@ def source_fingerprint(path):
 def pipeline_fingerprint():
     root = Path(__file__).resolve().parent
     digest = hashlib.sha256()
-    for name in ("spt_filter.py", "spt_partition.py", "spt_learning.py", "train_spt_classifier.py",
+    for name in ("spt_filter.py", "spt_partition.py", "spt_learning.py",
                  "src/spt_filter/spt_kernels.cpp", "build/libspt_kernels.so", "build/spt_cut_pursuit_build.json"):
         digest.update((root/name).read_bytes())
     return digest.hexdigest()
@@ -212,7 +275,7 @@ def main():
     parser.add_argument("--entrance-caves", nargs="*", default=[])
     parser.add_argument("--canopy-chunks", nargs="*", default=[])
     parser.add_argument("--voxel-size", type=float, default=0.04)
-    parser.add_argument("--cutmix-per-cave", type=int, default=2)
+    parser.add_argument("--cutmix-per-cave", type=int, default=3)
     parser.add_argument("--cache-dir", type=Path, default=Path("output/spt_graph_cache"))
     parser.add_argument("--output-model", type=Path, default=Path("output/spt_graphsage.npz"))
     parser.add_argument("--epochs", type=int, default=60)
@@ -263,8 +326,9 @@ def main():
     root = Path(__file__).resolve().parent
     lib = load_spt_kernels(root/"build/libspt_kernels.so")
     canopy_records = manifest.get("canopy_chunks", [])
-    canopy = [read_ply(Path(record["path"]))[0] for record in canopy_records]
+    canopy = [load_donor_chunk(record["path"]) for record in canopy_records]
     pipeline_id = pipeline_fingerprint()
+    cutmix_scenarios = ("mouth", "skylight", "exterior_surroundings")
     graphs = []
     for case_index, case in enumerate(manifest["training"]):
         path = Path(case["path"])
@@ -284,7 +348,7 @@ def main():
         if case["role"] == "interior":
             xyz = None
             for i in range(args.cutmix_per_cave):
-                scenario = "mouth" if i % 2 == 0 else "skylight"
+                scenario = cutmix_scenarios[i % len(cutmix_scenarios)]
                 seed = args.seed+case_index*100+i
                 mix_metadata = {**metadata, "role": "cutmix", "scenario": scenario, "seed": seed,
                                 "canopy_sources": [source_fingerprint(r["path"]) for r in canopy_records]}
@@ -304,8 +368,13 @@ def main():
                 "epochs": args.epochs, "seed": args.seed, "device": device,
                 "graphs": [g["metadata"] for g in graphs]}
     model.export(args.output_model, graphs[0]["feature_names"], metadata)
-    torch.save({"state_dict": model.cpu().state_dict(), "metadata": metadata,
-                "feature_names": graphs[0]["feature_names"].tolist()}, args.output_model.with_suffix(".pt"))
+    torch.save({
+        "state_dict": model.cpu().state_dict(),
+        "metadata": metadata,
+        "feature_names": graphs[0]["feature_names"].tolist(),
+        "global_feat_mean": model.global_feat_mean.detach().cpu().numpy(),
+        "global_feat_std": model.global_feat_std.detach().cpu().numpy(),
+    }, args.output_model.with_suffix(".pt"))
     print(f"[Saved] {args.output_model}, training {time.perf_counter()-started:.2f}s on {device}")
     if manifest.get("validation"):
         from evaluate_spt_classifier import evaluate_manifest

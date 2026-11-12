@@ -316,6 +316,8 @@ def main():
         orig_normals = res["p0_normals"][orig_to_p0]
 
         n_cav_orig = int(np.sum(orig_pred == 0))
+        n_veg_only_orig = int(np.sum(orig_pred == 1))
+        n_ext_gnd_orig = int(np.sum(orig_pred == 2))
         n_veg_orig = int(np.sum((orig_pred == 1) | (orig_pred == 2)))
         n_floor_orig = int(np.sum(orig_zone == 0))
         n_wall_orig = int(np.sum(orig_zone == 1))
@@ -349,8 +351,10 @@ def main():
             truth_orig = extras["scalar_ground_truth"].astype(np.int32)
             # Map ground truth to P0 via p0_to_orig for diagnostic PLY
             scalars_diag["scalar_ground_truth"] = truth_orig[p0_to_orig].astype(np.int32)
-            metrics_model = semantic_metrics(truth_orig, orig_pred)
-            metrics_heur = semantic_metrics(truth_orig, orig_heur)
+            eval_pred = np.where(orig_pred >= 1, 1, 0) if not np.any(truth_orig == 2) else orig_pred
+            eval_heur = np.where(orig_heur >= 1, 1, 0) if not np.any(truth_orig == 2) else orig_heur
+            metrics_model = semantic_metrics(truth_orig, eval_pred)
+            metrics_heur = semantic_metrics(truth_orig, eval_heur)
 
         write_ply_binary(diag_path, res["p0_xyz_f64"], res["p0_normals"], scalars_diag)
 
@@ -398,6 +402,9 @@ def main():
             "cavern_pct": round(100.0 * n_cav_orig / max(n_orig, 1), 2),
             "vegetation_points": n_veg_orig,
             "vegetation_pct": round(100.0 * n_veg_orig / max(n_orig, 1), 2),
+            "vegetation_only_points": n_veg_only_orig,
+            "exterior_ground_points": n_ext_gnd_orig,
+            "exterior_ground_pct": round(100.0 * n_ext_gnd_orig / max(n_orig, 1), 2),
             "floor_points": n_floor_orig,
             "wall_points": n_wall_orig,
             "ceiling_points": n_ceil_orig,

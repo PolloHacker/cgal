@@ -56,10 +56,21 @@ def evaluate_manifest(lib, entries, model_path=None, voxel_size=0.04):
                 probabilities = portable_predict(X_sanitized, result["edge_u"],
                                                   result["edge_v"], result["sp_pos"], model_path,
                                                   result["feature_names"])
+                labels_p1 = result["superpoint_p1"]
+                n_p1 = result["num_p1"]
+                counts_p1 = result["sp_counts"]
+                sp_roof = np.bincount(labels_p1, weights=result["roof_occlusion"], minlength=n_p1) / counts_p1
+                sp_nz = np.bincount(labels_p1, weights=result["signed_horizontality"], minlength=n_p1) / counts_p1
+                p1_edges = np.column_stack([result["edge_u"], result["edge_v"]])
                 sp_pred = filter_cavern_manifold(
                     probabilities.argmax(axis=1).astype(np.int32),
-                    result["edge_u"], result["edge_v"], result["sp_pos"],
-                    result["sp_counts"], probabilities=probabilities,
+                    result["sp_pos"],
+                    counts_p1,
+                    sp_roof_occlusion=sp_roof,
+                    sp_signed_nz=sp_nz,
+                    p1_edges=p1_edges,
+                    probabilities=probabilities,
+                    voxel_size=spacing,
                 )
                 prediction = sp_pred[result["superpoint_p1"]]
             else:
@@ -76,11 +87,14 @@ def evaluate_manifest(lib, entries, model_path=None, voxel_size=0.04):
                              f"exceed {tolerance:.4f} m mapping tolerance")
         hist = class_histograms(truth, result["superpoint_p1"][mapping], result["num_p1"])
         oracle = hist[:, :3].argmax(axis=1)[result["superpoint_p1"][mapping]]
+        pred_mapped = prediction[mapping]
+        if not np.any(truth == 2):
+            pred_mapped = np.where(pred_mapped >= 1, 1, 0)
         report = {
             "path": entry["path"], "source": str(source), "cave_system": entry["cave_system"],
             "voxel_size": spacing, "model": str(model_path) if model_path else None,
-            "prediction": semantic_metrics(truth, prediction[mapping]),
-            "heuristic": semantic_metrics(truth, result["predicted_class"][mapping]),
+            "prediction": semantic_metrics(truth, pred_mapped),
+            "heuristic": semantic_metrics(truth, np.where(result["predicted_class"][mapping] >= 1, 1, 0) if not np.any(truth == 2) else result["predicted_class"][mapping]),
             "partition_oracle": semantic_metrics(truth, oracle),
             "max_mapping_distance": float(distance.max()),
         }

@@ -158,6 +158,8 @@ def stream_map_and_export_both_cleaned(
     stats = {
         "spt_cav": 0,
         "spt_veg": 0,
+        "spt_veg_only": 0,
+        "spt_ext_ground": 0,
         "spt_floor": 0,
         "spt_wall": 0,
         "spt_ceil": 0,
@@ -213,6 +215,8 @@ def stream_map_and_export_both_cleaned(
 
             stats["spt_cav"] += int(np.sum(spt_keep))
             stats["spt_veg"] += int(np.sum(~spt_keep))
+            stats["spt_veg_only"] += int(np.sum(c_spt_pred == 1))
+            stats["spt_ext_ground"] += int(np.sum(c_spt_pred == 2))
             stats["spt_floor"] += int(np.sum(c_spt_zone == 0))
             stats["spt_wall"] += int(np.sum(c_spt_zone == 1))
             stats["spt_ceil"] += int(np.sum(c_spt_zone == 2))
@@ -487,6 +491,9 @@ def main():
             "cavern_pct": round(100.0 * full_stats["spt_cav"] / max(n_orig, 1), 2),
             "vegetation_points": full_stats["spt_veg"],
             "vegetation_pct": round(100.0 * full_stats["spt_veg"] / max(n_orig, 1), 2),
+            "vegetation_only_points": full_stats["spt_veg_only"],
+            "exterior_ground_points": full_stats["spt_ext_ground"],
+            "exterior_ground_pct": round(100.0 * full_stats["spt_ext_ground"] / max(n_orig, 1), 2),
             "floor_points": full_stats["spt_floor"],
             "wall_points": full_stats["spt_wall"],
             "ceiling_points": full_stats["spt_ceil"],

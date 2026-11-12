@@ -64,203 +64,453 @@
   "canopy_chunks": [
     {
       "path": "../annotations/canopy/for_instance_tree_01.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_01.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_02.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_02.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_03.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_03.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_04.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_04.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_05.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_05.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_06.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_06.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_07.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_07.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_08.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_08.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_09.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_09.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_10.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_10.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_11.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_11.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_12.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_12.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_13.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_13.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_14.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_14.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_15.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_15.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_16.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_16.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_17.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_17.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_18.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_18.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_19.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_19.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_20.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_20.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_21.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_21.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_22.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_22.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_23.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_23.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_24.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_24.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_25.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_25.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_26.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_26.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_27.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_27.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_28.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_28.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_29.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_29.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_30.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_30.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_31.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_31.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_32.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_32.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_33.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_33.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_34.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_34.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_35.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_35.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_36.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_36.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_37.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_37.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_38.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_38.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_39.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_39.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_40.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
+    },
+    {
+      "path": "../annotations/canopy/dales_exterior_40.ply",
+      "cave_system": "dales",
+      "source": "dales"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_41.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_42.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_43.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_44.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_45.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_46.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_47.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_48.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_49.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
     },
     {
       "path": "../annotations/canopy/for_instance_tree_50.ply",
-      "cave_system": "for_instance"
+      "cave_system": "for_instance",
+      "source": "for_instance"
     }
   ],
   "validation": [
